@@ -8,6 +8,14 @@ See [the web page](https://uofa-cmput404.github.io/general/project.html) for a d
 
 Make a distributed social network!
 
+## Group Members
+Rayan Zhi
+Eric Mo
+Garrick Tse
+Ali Zain Malik
+Peter Davidson 
+Regan Ng
+
 ## License
 
 * Choose an OSI approved license, name it here, and copy the license text to a file called `LICENSE`.
