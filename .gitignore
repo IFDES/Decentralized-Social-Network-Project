@@ -1,0 +1,52 @@
+# ---------- Python ----------
+__pycache__/
+*.py[cod]
+*$py.class
+
+# virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# packaging/build artifacts
+build/
+dist/
+*.egg-info/
+.eggs/
+pip-wheel-metadata/
+
+# test/coverage artifacts
+.pytest_cache/
+.coverage
+htmlcov/
+coverage.xml
+
+# Django
+db.sqlite3
+*.log
+media/
+
+# node/js
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# build outputs (bundlers)
+dist/
+build/
+.out/
+.next/
+.nuxt/
+.svelte-kit/
+.vite/
+.esbuild/
+coverage/
+
+# ide
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
