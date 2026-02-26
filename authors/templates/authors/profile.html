@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ author.display_name }}</title>
+</head>
+<body>
+  <h1>{{ author.display_name }}</h1>
+  {% if author.profile_image %}
+    <img src="{{ author.profile_image }}" alt="{{ author.display_name }}" width="160">
+  {% endif %}
+
+  <p><strong>Description:</strong> {{ author.description|default:"-" }}</p>
+  <p><strong>GitHub:</strong>
+    {% if author.github %}
+      <a href="{{ author.github }}">{{ author.github }}</a>
+    {% else %}
+      -
+    {% endif %}
+  </p>
+  <p><a href="{% url 'authors:edit_profile' author.uuid %}">Edit profile</a></p>
+
+  <h2>Public Entries</h2>
+  {% if public_entries %}
+    <ul>
+      {% for entry in public_entries %}
+        <li>
+          {% if entry.title %}
+            {{ entry.title }}
+          {% else %}
+            {{ entry }}
+          {% endif %}
+        </li>
+      {% endfor %}
+    </ul>
+  {% else %}
+    <p>No public entries yet.</p>
+  {% endif %}
+</body>
+</html>
