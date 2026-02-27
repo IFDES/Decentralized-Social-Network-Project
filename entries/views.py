@@ -20,6 +20,8 @@ from authors.models import Author
 from .forms import EntryDeleteForm, EntryForm
 from .models import Entry
 
+# This file is assisted by CoPilot on 27 Feb 2026 02:10 with the prompt
+# "Help me create a views.py file for entries in Django"
 
 def _build_entry_id(author: Author, entry: Entry) -> str:
     if entry.fqid:
