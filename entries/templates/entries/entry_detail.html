@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ entry.title|default:"Entry" }}</title>
+</head>
+<body>
+  <h1>{{ entry.title|default:"Entry" }}</h1>
+  <p><strong>Author:</strong> <a href="{% url 'authors:profile' author.uuid %}">{{ author.display_name }}</a></p>
+  <p><strong>Published:</strong> {{ entry.published }}</p>
+  <p><strong>Visibility:</strong> {{ entry.visibility }}</p>
+
+  {% if entry.description %}
+    <p><strong>Description:</strong> {{ entry.description }}</p>
+  {% endif %}
+
+  <h2>Content ({{ entry.content_type }})</h2>
+  <pre>{{ entry.content }}</pre>
+
+  <p>
+    <a href="{% url 'entries:entry-edit' author.uuid entry.uuid %}">Edit</a> |
+    <a href="{% url 'entries:entry-delete' author.uuid entry.uuid %}">Delete</a> |
+    <a href="{% url 'entries:author-entries' author.uuid %}">Back to entries list</a>
+  </p>
+</body>
+</html>
+

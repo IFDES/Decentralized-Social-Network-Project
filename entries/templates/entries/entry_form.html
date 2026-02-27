@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>
+    {% if is_create %}Create entry{% else %}Edit entry{% endif %} - {{ author.display_name }}
+  </title>
+</head>
+<body>
+  <h1>
+    {% if is_create %}Create entry{% else %}Edit entry{% endif %}
+    for {{ author.display_name }}
+  </h1>
+
+  <form method="post">
+    {% csrf_token %}
+    {{ form.as_p }}
+    <button type="submit">
+      {% if is_create %}Create entry{% else %}Save changes{% endif %}
+    </button>
+  </form>
+
+  <p>
+    {% if not is_create %}
+      <a href="{% url 'entries:entry-detail' author.uuid entry.uuid %}">Back to entry</a> |
+    {% endif %}
+    <a href="{% url 'entries:author-entries' author.uuid %}">Back to entries list</a>
+  </p>
+</body>
+</html>
+

@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ author.display_name }} - Entries</title>
+</head>
+<body>
+  <h1>Entries by {{ author.display_name }}</h1>
+
+  <p>
+    <a href="{% url 'authors:profile' author.uuid %}">Back to profile</a> |
+    <a href="{% url 'entries:entry-create' author.uuid %}">Create new entry</a>
+  </p>
+
+  {% if entries %}
+    <ul>
+      {% for entry in entries %}
+        <li>
+          <a href="{% url 'entries:entry-detail' author.uuid entry.uuid %}">
+            {{ entry.title|default:"(untitled entry)" }}
+          </a>
+          — {{ entry.published }}
+          ({{ entry.visibility }})
+        </li>
+      {% endfor %}
+    </ul>
+  {% else %}
+    <p>No entries yet.</p>
+  {% endif %}
+</body>
+</html>
+
