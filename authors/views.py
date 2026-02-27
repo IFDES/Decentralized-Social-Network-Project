@@ -37,7 +37,7 @@ def _author_to_dict(request: HttpRequest, author: Author) -> dict:
 
 def _get_public_entries(author: Author) -> list:
     try:
-        post_model = apps.get_model("posts", "Post")
+        post_model = apps.get_model("entries", "Entry")
     except LookupError:
         return []
 
@@ -50,7 +50,8 @@ def _get_public_entries(author: Author) -> list:
     queryset = post_model.objects.filter(author=author)
     if hasattr(post_model, "visibility"):
         queryset = queryset.filter(visibility="PUBLIC")
-
+    if hasattr(post_model, "is_deleted"):
+        queryset = queryset.filter(is_deleted=False)
     if hasattr(post_model, "published"):
         queryset = queryset.order_by("-published")
     elif hasattr(post_model, "created_at"):

@@ -26,10 +26,12 @@
     <ul>
       {% for entry in public_entries %}
         <li>
-          {% if entry.title %}
-            {{ entry.title }}
+          {% if entry.web %}
+            <a href="{{ entry.web }}">
+              {{ entry.title|default:"(untitled entry)" }}
+            </a>
           {% else %}
-            {{ entry }}
+            {{ entry.title|default:entry }}
           {% endif %}
         </li>
       {% endfor %}
@@ -37,5 +39,9 @@
   {% else %}
     <p>No public entries yet.</p>
   {% endif %}
+
+  <p>
+    <a href="{% url 'entries:author-entries' author.uuid %}">View all entries</a>
+  </p>
 </body>
 </html>
