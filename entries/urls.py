@@ -5,7 +5,6 @@ from . import views
 app_name = "entries"
 
 urlpatterns = [
-    # HTML pages
     path(
         "authors/<uuid:author_id>/entries/",
         views.author_entries_page,
@@ -31,7 +30,6 @@ urlpatterns = [
         views.entry_delete_page,
         name="entry-delete",
     ),
-    # API endpoints (local)
     path(
         "api/authors/<uuid:author_id>/entries",
         views.author_entries_api,

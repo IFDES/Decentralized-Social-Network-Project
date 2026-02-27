@@ -5,13 +5,11 @@ from django.db import models
 
 from authors.models import Author
 
-
+# This piece of code is assisted by CoPilot on 27 Feb 2026 02:05 with the prompt
+# "Help me polish this section of code and fill in missing parts on entries in a social media platform in Django"
 class Entry(models.Model):
     """
-    Local entry/post object.
-
-    Images and remote delivery are out of scope for Part 1, so this model
-    supports only text/plain and text/markdown content and local CRUD.
+    Only supports plain text and markdown for Project part 1 (temp)
     """
 
     VISIBILITY_PUBLIC = "PUBLIC"
@@ -79,7 +77,7 @@ class Entry(models.Model):
     class Meta:
         ordering = ["-published"]
 
-    def __str__(self) -> str:  # pragma: no cover - trivial
+    def __str__(self) -> str:  
         return self.title or f"Entry {self.uuid}"
 
     @property
