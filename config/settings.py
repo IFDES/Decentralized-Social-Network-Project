@@ -46,6 +46,7 @@ INSTALLED_APPS = [
     'authors',
     'posts',
     'inbox',
+    'entries',
     'config.core',
 ]
 
