@@ -98,7 +98,7 @@ def _stream_entries_queryset():
         Entry.objects.filter(is_deleted=False, deleted_at__isnull=True)
         .exclude(visibility=Entry.VISIBILITY_DELETED)
         .select_related("author")
-        .order_by("-updated_at", "-published")
+        .order_by("-updated_at", "-published", "-uuid")
     )
 
 

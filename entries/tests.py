@@ -173,3 +173,55 @@ class StreamApiTests(TestCase):
         self.assertNotIn(str(deleted_entry.fqid), returned_ids)
         self.assertEqual(payload["count"], 1)
 
+    def test_stream_orders_newest_first(self):
+        older_entry = Entry.objects.create(
+            author=self.author,
+            title="Older",
+            content="Older content",
+        )
+        newer_entry = Entry.objects.create(
+            author=self.author,
+            title="Newer",
+            content="Newer content",
+        )
+
+        response = self.client.get(reverse("entries:stream-api"))
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+
+        returned_ids = [item["id"] for item in payload["src"]]
+        self.assertEqual(returned_ids[0], str(newer_entry.fqid))
+        self.assertEqual(returned_ids[1], str(older_entry.fqid))
+
+    def test_stream_uses_deterministic_tiebreaker_when_timestamps_equal(self):
+        first_entry = Entry.objects.create(
+            author=self.author,
+            title="First",
+            content="First content",
+        )
+        second_entry = Entry.objects.create(
+            author=self.author,
+            title="Second",
+            content="Second content",
+        )
+
+        fixed_time = datetime(2026, 2, 28, 12, 0, 0, tzinfo=timezone.utc)
+        Entry.objects.filter(pk__in=[first_entry.pk, second_entry.pk]).update(
+            updated_at=fixed_time, published=fixed_time
+        )
+
+        first_entry.refresh_from_db()
+        second_entry.refresh_from_db()
+
+        response = self.client.get(reverse("entries:stream-api"))
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+
+        expected_ids = list(
+            Entry.objects.filter(pk__in=[first_entry.pk, second_entry.pk])
+            .order_by("-uuid")
+            .values_list("fqid", flat=True)
+        )
+        returned_ids = [item["id"] for item in payload["src"]]
+        self.assertEqual(returned_ids[:2], expected_ids)
+
