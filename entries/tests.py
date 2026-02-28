@@ -1,3 +1,5 @@
+import json
+
 from django.test import Client, TestCase
 from django.urls import reverse
 
@@ -63,4 +65,85 @@ class EntryApiTests(TestCase):
 
         entry.refresh_from_db()
         self.assertTrue(entry.is_deleted)
+
+
+class StreamApiTests(TestCase):
+    def setUp(self):
+        self.client = Client()
+        self.author = Author.objects.create(display_name="Stream Author")
+
+    def test_stream_includes_created_entry(self):
+        Entry.objects.create(
+            author=self.author,
+            title="Stream Item",
+            content="Original content",
+        )
+
+        response = self.client.get(reverse("entries:stream-api"))
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+
+        self.assertEqual(payload["type"], "entries")
+        self.assertEqual(payload["count"], 1)
+        self.assertEqual(len(payload["src"]), 1)
+        self.assertEqual(payload["src"][0]["content"], "Original content")
+        self.assertIn("updated_at", payload["src"][0])
+
+    def test_stream_returns_latest_edited_version_once(self):
+        entry = Entry.objects.create(
+            author=self.author,
+            title="Editable",
+            content="Old content",
+            content_type=Entry.CONTENT_TEXT_PLAIN,
+            visibility=Entry.VISIBILITY_PUBLIC,
+        )
+
+        edit_url = reverse("entries:entry-detail-api", args=[self.author.uuid, entry.uuid])
+        edit_response = self.client.put(
+            edit_url,
+            data=json.dumps(
+                {
+                    "title": "Editable",
+                    "description": "",
+                    "content": "Edited content",
+                    "contentType": "text/plain",
+                    "visibility": "PUBLIC",
+                }
+            ),
+            content_type="application/json",
+        )
+        self.assertEqual(edit_response.status_code, 200)
+
+        response = self.client.get(reverse("entries:stream-api"))
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+
+        self.assertEqual(payload["count"], 1)
+        self.assertEqual(len(payload["src"]), 1)
+
+        stream_entry = payload["src"][0]
+        self.assertEqual(stream_entry["content"], "Edited content")
+        self.assertNotIn("Old content", [item["content"] for item in payload["src"]])
+
+        stream_ids = [item["id"] for item in payload["src"]]
+        self.assertEqual(stream_ids.count(stream_entry["id"]), 1)
+        self.assertIn("updated_at", stream_entry)
+
+    def test_stream_excludes_deleted_entries(self):
+        entry = Entry.objects.create(
+            author=self.author,
+            title="To delete",
+            content="Delete me",
+        )
+
+        delete_url = reverse("entries:entry-detail-api", args=[self.author.uuid, entry.uuid])
+        delete_response = self.client.delete(delete_url)
+        self.assertEqual(delete_response.status_code, 204)
+
+        response = self.client.get(reverse("entries:stream-api"))
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+
+        self.assertEqual(payload["count"], 0)
+        self.assertEqual(payload["src"], [])
 

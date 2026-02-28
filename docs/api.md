@@ -118,3 +118,79 @@ Use this template for endpoints like `GET /api/authors/{AUTHOR_SERIAL}/` or `GET
 
 - **Status**: `204 No Content` on success.
 
+---
+
+## Stream Endpoint
+
+### GET /api/stream
+
+- **Purpose**: Return a node-wide stream of public, non-deleted entries.
+- **Auth**: None currently required for local development.
+- **Query params**:
+  - `page` (optional, default `1`)
+  - `size` (optional, default `10`)
+
+#### Latest version definition
+
+This project currently uses an overwrite edit model: editing an entry updates the same database row.
+The stream therefore returns the current row state, sorted newest-first by `updated_at` (then `published`).
+Older versions are not returned, and deleted entries are excluded.
+
+#### Example request
+
+```http
+GET /api/stream?page=1&size=2
+```
+
+#### Example response
+
+```json
+{
+  "type": "entries",
+  "page_number": 1,
+  "size": 2,
+  "count": 1,
+  "src": [
+    {
+      "type": "entry",
+      "title": "Weekly update",
+      "id": "http://127.0.0.1:8000/api/authors/8d35d13e-f0ee-468d-bd6f-f942ec660f43/entries/d25343a5-c5cf-4734-b8cf-11211f7af26f",
+      "web": "http://127.0.0.1:8000/authors/8d35d13e-f0ee-468d-bd6f-f942ec660f43/entries/d25343a5-c5cf-4734-b8cf-11211f7af26f",
+      "description": "",
+      "contentType": "text/plain",
+      "content": "Edited content",
+      "author": {
+        "type": "author",
+        "id": "http://127.0.0.1:8000/api/authors/8d35d13e-f0ee-468d-bd6f-f942ec660f43",
+        "host": "http://127.0.0.1:8000/api/",
+        "displayName": "Stream Author",
+        "web": "http://127.0.0.1:8000/authors/8d35d13e-f0ee-468d-bd6f-f942ec660f43",
+        "github": "",
+        "profileImage": ""
+      },
+      "comments": {
+        "type": "comments",
+        "id": "http://127.0.0.1:8000/api/authors/8d35d13e-f0ee-468d-bd6f-f942ec660f43/entries/d25343a5-c5cf-4734-b8cf-11211f7af26f/comments",
+        "web": "http://127.0.0.1:8000/authors/8d35d13e-f0ee-468d-bd6f-f942ec660f43/entries/d25343a5-c5cf-4734-b8cf-11211f7af26f",
+        "page_number": 1,
+        "size": 5,
+        "count": 0,
+        "src": []
+      },
+      "likes": {
+        "type": "likes",
+        "id": "http://127.0.0.1:8000/api/authors/8d35d13e-f0ee-468d-bd6f-f942ec660f43/entries/d25343a5-c5cf-4734-b8cf-11211f7af26f/likes",
+        "web": "http://127.0.0.1:8000/authors/8d35d13e-f0ee-468d-bd6f-f942ec660f43/entries/d25343a5-c5cf-4734-b8cf-11211f7af26f",
+        "page_number": 1,
+        "size": 5,
+        "count": 0,
+        "src": []
+      },
+      "published": "2026-02-28T12:00:00+00:00",
+      "updated_at": "2026-02-28T12:05:00+00:00",
+      "visibility": "PUBLIC"
+    }
+  ]
+}
+```
+

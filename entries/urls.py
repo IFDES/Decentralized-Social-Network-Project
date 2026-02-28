@@ -6,6 +6,11 @@ app_name = "entries"
 
 urlpatterns = [
     path(
+        "stream/",
+        views.stream_page,
+        name="stream-page",
+    ),
+    path(
         "authors/<uuid:author_id>/entries/",
         views.author_entries_page,
         name="author-entries",
@@ -29,6 +34,15 @@ urlpatterns = [
         "authors/<uuid:author_id>/entries/<uuid:entry_id>/delete/",
         views.entry_delete_page,
         name="entry-delete",
+    ),
+    path(
+        "api/stream",
+        views.stream_api,
+        name="stream-api",
+    ),
+    path(
+        "api/stream/",
+        views.stream_api,
     ),
     path(
         "api/authors/<uuid:author_id>/entries",

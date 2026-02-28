@@ -88,13 +88,35 @@ def _entry_to_json(entry: Entry) -> dict:
             "src": [],
         },
         "published": entry.published.astimezone(timezone.utc).isoformat(),
+        "updated_at": entry.updated_at.astimezone(timezone.utc).isoformat(),
         "visibility": entry.visibility,
     }
+
+
+def _stream_entries_queryset():
+    return (
+        Entry.objects.filter(is_deleted=False)
+        .exclude(visibility=Entry.VISIBILITY_DELETED)
+        .select_related("author")
+        .order_by("-updated_at", "-published")
+    )
 
 
 # ---------------------------------------------------------------------------
 # HTML views (local browser UI)
 # ---------------------------------------------------------------------------
+
+
+@require_http_methods(["GET"])
+def stream_page(request: HttpRequest) -> HttpResponse:
+    entries = _stream_entries_queryset()
+    return render(
+        request,
+        "entries/stream.html",
+        {
+            "entries": entries,
+        },
+    )
 
 
 @require_http_methods(["GET"])
@@ -230,6 +252,21 @@ def entry_delete_page(
 # ---------------------------------------------------------------------------
 # API views (local-only REST style)
 # ---------------------------------------------------------------------------
+
+
+@require_http_methods(["GET"])
+def stream_api(request: HttpRequest) -> HttpResponse:
+    queryset = _stream_entries_queryset()
+    page_number, size, count, page_items = _paginate_queryset(request, queryset)
+    return JsonResponse(
+        {
+            "type": "entries",
+            "page_number": page_number,
+            "size": size,
+            "count": count,
+            "src": [_entry_to_json(entry) for entry in page_items],
+        }
+    )
 
 
 def _parse_json_body(request: HttpRequest) -> dict:

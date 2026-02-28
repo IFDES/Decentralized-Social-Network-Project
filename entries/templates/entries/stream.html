@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Stream</title>
+</head>
+<body>
+  <h1>Stream</h1>
+
+  {% if entries %}
+    <ul>
+      {% for entry in entries %}
+        <li>
+          <h2>{{ entry.title|default:"Untitled entry" }}</h2>
+          <p><strong>Author:</strong> {{ entry.author.display_name }}</p>
+          <p><strong>Content Type:</strong> {{ entry.content_type }}</p>
+          <p>{{ entry.content }}</p>
+          <p><strong>Published:</strong> {{ entry.published }}</p>
+          <p><strong>Updated:</strong> {{ entry.updated_at }}</p>
+        </li>
+      {% endfor %}
+    </ul>
+  {% else %}
+    <p>No stream entries available.</p>
+  {% endif %}
+</body>
+</html>
