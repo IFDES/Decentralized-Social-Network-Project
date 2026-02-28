@@ -1,5 +1,7 @@
 import json
 
+from datetime import datetime, timezone
+
 from django.test import Client, TestCase
 from django.urls import reverse
 
@@ -146,4 +148,28 @@ class StreamApiTests(TestCase):
 
         self.assertEqual(payload["count"], 0)
         self.assertEqual(payload["src"], [])
+
+    def test_stream_excludes_deleted_at_entries_and_keeps_others(self):
+        deleted_entry = Entry.objects.create(
+            author=self.author,
+            title="Deleted by timestamp",
+            content="Should not appear",
+        )
+        active_entry = Entry.objects.create(
+            author=self.author,
+            title="Active entry",
+            content="Should appear",
+        )
+
+        deleted_entry.deleted_at = datetime.now(timezone.utc)
+        deleted_entry.save(update_fields=["deleted_at", "updated_at"])
+
+        response = self.client.get(reverse("entries:stream-api"))
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+
+        returned_ids = [item["id"] for item in payload["src"]]
+        self.assertIn(str(active_entry.fqid), returned_ids)
+        self.assertNotIn(str(deleted_entry.fqid), returned_ids)
+        self.assertEqual(payload["count"], 1)
 

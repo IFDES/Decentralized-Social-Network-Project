@@ -95,7 +95,7 @@ def _entry_to_json(entry: Entry) -> dict:
 
 def _stream_entries_queryset():
     return (
-        Entry.objects.filter(is_deleted=False)
+        Entry.objects.filter(is_deleted=False, deleted_at__isnull=True)
         .exclude(visibility=Entry.VISIBILITY_DELETED)
         .select_related("author")
         .order_by("-updated_at", "-published")

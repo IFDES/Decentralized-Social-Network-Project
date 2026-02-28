@@ -136,6 +136,14 @@ This project currently uses an overwrite edit model: editing an entry updates th
 The stream therefore returns the current row state, sorted newest-first by `updated_at` (then `published`).
 Older versions are not returned, and deleted entries are excluded.
 
+#### Deleted definition
+
+An entry is treated as deleted and excluded from stream results when either of these is true:
+- `is_deleted` is `true`
+- `deleted_at` is set (not null)
+
+Entries with `visibility = DELETED` are also excluded from stream results.
+
 #### Example request
 
 ```http
@@ -193,4 +201,6 @@ GET /api/stream?page=1&size=2
   ]
 }
 ```
+
+Deleted entries are not included in stream responses.
 
