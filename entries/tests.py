@@ -136,28 +136,34 @@ class StreamApiTests(TestCase):
         self.assertNotIn(str(hidden_entry.fqid), returned_ids)
         self.assertIn(str(public_entry.fqid), returned_ids)
 
-    def test_stream_includes_requester_own_non_public_entries(self):
+    def test_stream_excludes_non_public_entries(self):
         own_friends_entry = Entry.objects.create(
             author=self.author,
             title="Own friends-only",
-            content="Should appear for owner",
+            content="Should not appear",
             visibility=Entry.VISIBILITY_FRIENDS,
         )
-        other_friends_entry = Entry.objects.create(
+        other_unlisted_entry = Entry.objects.create(
             author=self.other_author,
-            title="Other friends-only",
-            content="Should stay hidden",
-            visibility=Entry.VISIBILITY_FRIENDS,
+            title="Other unlisted",
+            content="Should not appear",
+            visibility=Entry.VISIBILITY_UNLISTED,
+        )
+        public_entry = Entry.objects.create(
+            author=self.other_author,
+            title="Public",
+            content="Should appear",
+            visibility=Entry.VISIBILITY_PUBLIC,
         )
 
-        url = f"{reverse('entries:stream-api')}?author={self.author.uuid}"
-        response = self.client.get(url)
+        response = self.client.get(reverse("entries:stream-api"))
         self.assertEqual(response.status_code, 200)
         payload = response.json()
 
         returned_ids = [item["id"] for item in payload["src"]]
-        self.assertIn(str(own_friends_entry.fqid), returned_ids)
-        self.assertNotIn(str(other_friends_entry.fqid), returned_ids)
+        self.assertNotIn(str(own_friends_entry.fqid), returned_ids)
+        self.assertNotIn(str(other_unlisted_entry.fqid), returned_ids)
+        self.assertIn(str(public_entry.fqid), returned_ids)
 
     def test_stream_returns_latest_edited_version_once(self):
         entry = Entry.objects.create(
@@ -252,6 +258,16 @@ class StreamApiTests(TestCase):
             title="Newer",
             content="Newer content",
         )
+        older_time = datetime(2026, 2, 28, 11, 0, 0, tzinfo=timezone.utc)
+        newer_time = datetime(2026, 2, 28, 12, 0, 0, tzinfo=timezone.utc)
+        Entry.objects.filter(pk=older_entry.pk).update(
+            updated_at=older_time, published=older_time
+        )
+        Entry.objects.filter(pk=newer_entry.pk).update(
+            updated_at=newer_time, published=newer_time
+        )
+        older_entry.refresh_from_db()
+        newer_entry.refresh_from_db()
 
         response = self.client.get(reverse("entries:stream-api"))
         self.assertEqual(response.status_code, 200)
@@ -292,4 +308,30 @@ class StreamApiTests(TestCase):
         )
         returned_ids = [item["id"] for item in payload["src"]]
         self.assertEqual(returned_ids[:2], expected_ids)
+
+
+class StreamPageTests(TestCase):
+    def setUp(self):
+        self.client = Client()
+        self.author = Author.objects.create(display_name="Template Author")
+
+    def test_stream_page_orders_newest_first(self):
+        Entry.objects.create(
+            author=self.author,
+            title="Older title",
+            content="Older content",
+            visibility=Entry.VISIBILITY_PUBLIC,
+        )
+        Entry.objects.create(
+            author=self.author,
+            title="Newer title",
+            content="Newer content",
+            visibility=Entry.VISIBILITY_PUBLIC,
+        )
+
+        response = self.client.get(reverse("entries:stream-page"))
+        self.assertEqual(response.status_code, 200)
+        content = response.content.decode("utf-8")
+
+        self.assertLess(content.find("Newer title"), content.find("Older title"))
 

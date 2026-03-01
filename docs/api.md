@@ -125,8 +125,7 @@ Use this template for endpoints like `GET /api/authors/{AUTHOR_SERIAL}/` or `GET
 ### GET /stream/
 
 - **Purpose**: Template-rendered stream page for a consolidated feed.
-- **Optional query param**:
-  - `author` (UUID): when provided, includes this local author's own non-public entries in addition to public entries.
+- **Behaviour**: node-wide PUBLIC discovery stream for entries known by this node.
 
 ### GET /api/stream
 
@@ -135,7 +134,6 @@ Use this template for endpoints like `GET /api/authors/{AUTHOR_SERIAL}/` or `GET
 - **Query params**:
   - `page` (optional, default `1`)
   - `size` (optional, default `10`)
-  - `author` (optional UUID): requester author context; includes that author's own non-public entries.
 
 #### Latest version definition
 
@@ -155,14 +153,14 @@ Entries with `visibility = DELETED` are also excluded from stream results.
 #### Entries included in this implementation
 
 - Always includes `PUBLIC` entries from local authors.
-- Includes requester author's own non-public entries only when requester context is provided via `author` query parameter.
+- Excludes all non-public entries (`FRIENDS`, `UNLISTED`, and any equivalent private visibility values).
 - Relationship-based visibility (follows/friends) is not implemented in this repo yet, so no additional relationship visibility is applied.
-- Non-public entries from other authors are excluded.
+- Non-public entries are excluded for all viewers.
 
 #### Example request
 
 ```http
-GET /api/stream?page=1&size=2&author=8d35d13e-f0ee-468d-bd6f-f942ec660f43
+GET /api/stream?page=1&size=2
 ```
 
 The response order is newest-first according to `updated_at`.
@@ -217,25 +215,25 @@ The response order is newest-first according to `updated_at`.
     },
     {
       "type": "entry",
-      "title": "Draft note",
-      "id": "http://127.0.0.1:8000/api/authors/8d35d13e-f0ee-468d-bd6f-f942ec660f43/entries/6b1dc656-0704-48da-bf2f-c6507aa2fbbd",
-      "web": "http://127.0.0.1:8000/authors/8d35d13e-f0ee-468d-bd6f-f942ec660f43/entries/6b1dc656-0704-48da-bf2f-c6507aa2fbbd",
+      "title": "Another public post",
+      "id": "http://127.0.0.1:8000/api/authors/11111111-1111-1111-1111-111111111111/entries/22222222-2222-2222-2222-222222222222",
+      "web": "http://127.0.0.1:8000/authors/11111111-1111-1111-1111-111111111111/entries/22222222-2222-2222-2222-222222222222",
       "description": "",
       "contentType": "text/plain",
-      "content": "Personal draft",
+      "content": "A second public message",
       "author": {
         "type": "author",
-        "id": "http://127.0.0.1:8000/api/authors/8d35d13e-f0ee-468d-bd6f-f942ec660f43",
+        "id": "http://127.0.0.1:8000/api/authors/11111111-1111-1111-1111-111111111111",
         "host": "http://127.0.0.1:8000/api/",
-        "displayName": "Stream Author",
-        "web": "http://127.0.0.1:8000/authors/8d35d13e-f0ee-468d-bd6f-f942ec660f43",
+        "displayName": "Another Author",
+        "web": "http://127.0.0.1:8000/authors/11111111-1111-1111-1111-111111111111",
         "github": "",
         "profileImage": ""
       },
       "comments": {
         "type": "comments",
-        "id": "http://127.0.0.1:8000/api/authors/8d35d13e-f0ee-468d-bd6f-f942ec660f43/entries/6b1dc656-0704-48da-bf2f-c6507aa2fbbd/comments",
-        "web": "http://127.0.0.1:8000/authors/8d35d13e-f0ee-468d-bd6f-f942ec660f43/entries/6b1dc656-0704-48da-bf2f-c6507aa2fbbd",
+        "id": "http://127.0.0.1:8000/api/authors/11111111-1111-1111-1111-111111111111/entries/22222222-2222-2222-2222-222222222222/comments",
+        "web": "http://127.0.0.1:8000/authors/11111111-1111-1111-1111-111111111111/entries/22222222-2222-2222-2222-222222222222",
         "page_number": 1,
         "size": 5,
         "count": 0,
@@ -243,8 +241,8 @@ The response order is newest-first according to `updated_at`.
       },
       "likes": {
         "type": "likes",
-        "id": "http://127.0.0.1:8000/api/authors/8d35d13e-f0ee-468d-bd6f-f942ec660f43/entries/6b1dc656-0704-48da-bf2f-c6507aa2fbbd/likes",
-        "web": "http://127.0.0.1:8000/authors/8d35d13e-f0ee-468d-bd6f-f942ec660f43/entries/6b1dc656-0704-48da-bf2f-c6507aa2fbbd",
+        "id": "http://127.0.0.1:8000/api/authors/11111111-1111-1111-1111-111111111111/entries/22222222-2222-2222-2222-222222222222/likes",
+        "web": "http://127.0.0.1:8000/authors/11111111-1111-1111-1111-111111111111/entries/22222222-2222-2222-2222-222222222222",
         "page_number": 1,
         "size": 5,
         "count": 0,
@@ -252,7 +250,7 @@ The response order is newest-first according to `updated_at`.
       },
       "published": "2026-02-28T11:20:00+00:00",
       "updated_at": "2026-02-28T11:20:00+00:00",
-      "visibility": "FRIENDS"
+      "visibility": "PUBLIC"
     }
   ]
 }
