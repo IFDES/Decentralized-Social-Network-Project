@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from uuid import UUID
 
 from django.conf import settings
+from django.db.models import Q
 from django.http import (
     HttpRequest,
     HttpResponse,
@@ -93,13 +94,34 @@ def _entry_to_json(entry: Entry) -> dict:
     }
 
 
-def _stream_entries_queryset():
-    return (
+def _requester_author_from_request(request: HttpRequest):
+    author_id = request.GET.get("author") or request.GET.get("author_id")
+    if not author_id:
+        return None
+
+    try:
+        author_uuid = UUID(author_id)
+    except (ValueError, TypeError):
+        return None
+
+    return Author.objects.filter(pk=author_uuid, is_deleted=False).first()
+
+
+def _stream_entries_queryset(requester_author=None):
+    queryset = (
         Entry.objects.filter(is_deleted=False, deleted_at__isnull=True)
         .exclude(visibility=Entry.VISIBILITY_DELETED)
         .select_related("author")
-        .order_by("-updated_at", "-published", "-uuid")
     )
+
+    if requester_author is None:
+        queryset = queryset.filter(visibility=Entry.VISIBILITY_PUBLIC)
+    else:
+        queryset = queryset.filter(
+            Q(visibility=Entry.VISIBILITY_PUBLIC) | Q(author=requester_author)
+        )
+
+    return queryset.order_by("-updated_at", "-published", "-uuid")
 
 
 # ---------------------------------------------------------------------------
@@ -109,12 +131,14 @@ def _stream_entries_queryset():
 
 @require_http_methods(["GET"])
 def stream_page(request: HttpRequest) -> HttpResponse:
-    entries = _stream_entries_queryset()
+    requester_author = _requester_author_from_request(request)
+    entries = _stream_entries_queryset(requester_author)
     return render(
         request,
         "entries/stream.html",
         {
             "entries": entries,
+            "requester_author": requester_author,
         },
     )
 
@@ -256,7 +280,8 @@ def entry_delete_page(
 
 @require_http_methods(["GET"])
 def stream_api(request: HttpRequest) -> HttpResponse:
-    queryset = _stream_entries_queryset()
+    requester_author = _requester_author_from_request(request)
+    queryset = _stream_entries_queryset(requester_author)
     page_number, size, count, page_items = _paginate_queryset(request, queryset)
     return JsonResponse(
         {

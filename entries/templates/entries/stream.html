@@ -7,6 +7,9 @@
 </head>
 <body>
   <h1>Stream</h1>
+  {% if requester_author %}
+    <p>Viewing stream as {{ requester_author.display_name }}</p>
+  {% endif %}
 
   {% if entries %}
     <ul>
@@ -15,9 +18,13 @@
           <h2>{{ entry.title|default:"Untitled entry" }}</h2>
           <p><strong>Author:</strong> {{ entry.author.display_name }}</p>
           <p><strong>Content Type:</strong> {{ entry.content_type }}</p>
+          <p><strong>Visibility:</strong> {{ entry.visibility }}</p>
           <p>{{ entry.content }}</p>
           <p><strong>Published:</strong> {{ entry.published }}</p>
           <p><strong>Updated:</strong> {{ entry.updated_at }}</p>
+          <p>
+            <a href="{% url 'entries:entry-detail' entry.author.uuid entry.uuid %}">View entry</a>
+          </p>
         </li>
       {% endfor %}
     </ul>

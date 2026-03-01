@@ -73,6 +73,7 @@ class StreamApiTests(TestCase):
     def setUp(self):
         self.client = Client()
         self.author = Author.objects.create(display_name="Stream Author")
+        self.other_author = Author.objects.create(display_name="Other Author")
 
     def test_stream_includes_created_entry(self):
         Entry.objects.create(
@@ -90,6 +91,73 @@ class StreamApiTests(TestCase):
         self.assertEqual(len(payload["src"]), 1)
         self.assertEqual(payload["src"][0]["content"], "Original content")
         self.assertIn("updated_at", payload["src"][0])
+
+    def test_stream_includes_public_entries_from_multiple_authors(self):
+        first_entry = Entry.objects.create(
+            author=self.author,
+            title="Public one",
+            content="Visible one",
+            visibility=Entry.VISIBILITY_PUBLIC,
+        )
+        second_entry = Entry.objects.create(
+            author=self.other_author,
+            title="Public two",
+            content="Visible two",
+            visibility=Entry.VISIBILITY_PUBLIC,
+        )
+
+        response = self.client.get(reverse("entries:stream-api"))
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+
+        returned_ids = [item["id"] for item in payload["src"]]
+        self.assertIn(str(first_entry.fqid), returned_ids)
+        self.assertIn(str(second_entry.fqid), returned_ids)
+
+    def test_stream_does_not_leak_non_public_entries_from_other_authors(self):
+        hidden_entry = Entry.objects.create(
+            author=self.other_author,
+            title="Hidden",
+            content="Should be hidden",
+            visibility=Entry.VISIBILITY_FRIENDS,
+        )
+        public_entry = Entry.objects.create(
+            author=self.author,
+            title="Public",
+            content="Should be visible",
+            visibility=Entry.VISIBILITY_PUBLIC,
+        )
+
+        response = self.client.get(reverse("entries:stream-api"))
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+
+        returned_ids = [item["id"] for item in payload["src"]]
+        self.assertNotIn(str(hidden_entry.fqid), returned_ids)
+        self.assertIn(str(public_entry.fqid), returned_ids)
+
+    def test_stream_includes_requester_own_non_public_entries(self):
+        own_friends_entry = Entry.objects.create(
+            author=self.author,
+            title="Own friends-only",
+            content="Should appear for owner",
+            visibility=Entry.VISIBILITY_FRIENDS,
+        )
+        other_friends_entry = Entry.objects.create(
+            author=self.other_author,
+            title="Other friends-only",
+            content="Should stay hidden",
+            visibility=Entry.VISIBILITY_FRIENDS,
+        )
+
+        url = f"{reverse('entries:stream-api')}?author={self.author.uuid}"
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+
+        returned_ids = [item["id"] for item in payload["src"]]
+        self.assertIn(str(own_friends_entry.fqid), returned_ids)
+        self.assertNotIn(str(other_friends_entry.fqid), returned_ids)
 
     def test_stream_returns_latest_edited_version_once(self):
         entry = Entry.objects.create(

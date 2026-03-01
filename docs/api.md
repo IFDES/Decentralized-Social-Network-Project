@@ -122,13 +122,20 @@ Use this template for endpoints like `GET /api/authors/{AUTHOR_SERIAL}/` or `GET
 
 ## Stream Endpoint
 
+### GET /stream/
+
+- **Purpose**: Template-rendered stream page for a consolidated feed.
+- **Optional query param**:
+  - `author` (UUID): when provided, includes this local author's own non-public entries in addition to public entries.
+
 ### GET /api/stream
 
-- **Purpose**: Return a node-wide stream of public, non-deleted entries.
+- **Purpose**: Return a consolidated stream of entries an author should know about.
 - **Auth**: None currently required for local development.
 - **Query params**:
   - `page` (optional, default `1`)
   - `size` (optional, default `10`)
+  - `author` (optional UUID): requester author context; includes that author's own non-public entries.
 
 #### Latest version definition
 
@@ -145,10 +152,17 @@ An entry is treated as deleted and excluded from stream results when either of t
 
 Entries with `visibility = DELETED` are also excluded from stream results.
 
+#### Entries included in this implementation
+
+- Always includes `PUBLIC` entries from local authors.
+- Includes requester author's own non-public entries only when requester context is provided via `author` query parameter.
+- Relationship-based visibility (follows/friends) is not implemented in this repo yet, so no additional relationship visibility is applied.
+- Non-public entries from other authors are excluded.
+
 #### Example request
 
 ```http
-GET /api/stream?page=1&size=2
+GET /api/stream?page=1&size=2&author=8d35d13e-f0ee-468d-bd6f-f942ec660f43
 ```
 
 The response order is newest-first according to `updated_at`.
@@ -160,7 +174,7 @@ The response order is newest-first according to `updated_at`.
   "type": "entries",
   "page_number": 1,
   "size": 2,
-  "count": 1,
+  "count": 2,
   "src": [
     {
       "type": "entry",
@@ -200,6 +214,45 @@ The response order is newest-first according to `updated_at`.
       "published": "2026-02-28T12:00:00+00:00",
       "updated_at": "2026-02-28T12:05:00+00:00",
       "visibility": "PUBLIC"
+    },
+    {
+      "type": "entry",
+      "title": "Draft note",
+      "id": "http://127.0.0.1:8000/api/authors/8d35d13e-f0ee-468d-bd6f-f942ec660f43/entries/6b1dc656-0704-48da-bf2f-c6507aa2fbbd",
+      "web": "http://127.0.0.1:8000/authors/8d35d13e-f0ee-468d-bd6f-f942ec660f43/entries/6b1dc656-0704-48da-bf2f-c6507aa2fbbd",
+      "description": "",
+      "contentType": "text/plain",
+      "content": "Personal draft",
+      "author": {
+        "type": "author",
+        "id": "http://127.0.0.1:8000/api/authors/8d35d13e-f0ee-468d-bd6f-f942ec660f43",
+        "host": "http://127.0.0.1:8000/api/",
+        "displayName": "Stream Author",
+        "web": "http://127.0.0.1:8000/authors/8d35d13e-f0ee-468d-bd6f-f942ec660f43",
+        "github": "",
+        "profileImage": ""
+      },
+      "comments": {
+        "type": "comments",
+        "id": "http://127.0.0.1:8000/api/authors/8d35d13e-f0ee-468d-bd6f-f942ec660f43/entries/6b1dc656-0704-48da-bf2f-c6507aa2fbbd/comments",
+        "web": "http://127.0.0.1:8000/authors/8d35d13e-f0ee-468d-bd6f-f942ec660f43/entries/6b1dc656-0704-48da-bf2f-c6507aa2fbbd",
+        "page_number": 1,
+        "size": 5,
+        "count": 0,
+        "src": []
+      },
+      "likes": {
+        "type": "likes",
+        "id": "http://127.0.0.1:8000/api/authors/8d35d13e-f0ee-468d-bd6f-f942ec660f43/entries/6b1dc656-0704-48da-bf2f-c6507aa2fbbd/likes",
+        "web": "http://127.0.0.1:8000/authors/8d35d13e-f0ee-468d-bd6f-f942ec660f43/entries/6b1dc656-0704-48da-bf2f-c6507aa2fbbd",
+        "page_number": 1,
+        "size": 5,
+        "count": 0,
+        "src": []
+      },
+      "published": "2026-02-28T11:20:00+00:00",
+      "updated_at": "2026-02-28T11:20:00+00:00",
+      "visibility": "FRIENDS"
     }
   ]
 }
