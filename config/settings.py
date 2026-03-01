@@ -48,6 +48,7 @@ INSTALLED_APPS = [
     'inbox',
     'entries',
     'config.core',
+    'follows',
 ]
 
 MIDDLEWARE = [

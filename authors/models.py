@@ -1,6 +1,6 @@
 import uuid
 from django.db import models
-
+from django.conf import settings
 
 class Author(models.Model):
     uuid = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -22,3 +22,11 @@ class Author(models.Model):
 
     def __str__(self):
         return self.display_name
+
+# This is User or AuthorAccount, need an Author <-> User mapping for proper auth to fulfill "authenticated as AUTHOR_SERIAL"
+class AuthorAccount(models.Model):
+    user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="author_account")
+    author = models.OneToOneField(Author, on_delete=models.CASCADE, related_name="author_account")
+
+    def __str__(self):
+        return f"{self.user.username} -> {self.author.uuid}"
