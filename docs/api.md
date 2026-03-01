@@ -133,7 +133,8 @@ Use this template for endpoints like `GET /api/authors/{AUTHOR_SERIAL}/` or `GET
 #### Latest version definition
 
 This project currently uses an overwrite edit model: editing an entry updates the same database row.
-The stream therefore returns the current row state, sorted newest-first by `updated_at` (then `published`).
+The stream therefore returns the current row state, sorted most recent first by `updated_at`
+(then `published`, then `uuid` descending as a deterministic tie-breaker).
 Older versions are not returned, and deleted entries are excluded.
 
 #### Deleted definition
@@ -149,6 +150,8 @@ Entries with `visibility = DELETED` are also excluded from stream results.
 ```http
 GET /api/stream?page=1&size=2
 ```
+
+The response order is newest-first according to `updated_at`.
 
 #### Example response
 
