@@ -1,0 +1,301 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Follows UI (Basic)</title>
+  <style>
+    body { font-family: system-ui, Arial, sans-serif; margin: 20px; max-width: 980px; }
+    h1 { margin-bottom: 0.2rem; }
+    p.note { margin-top: 0; color: #444; }
+    fieldset { margin: 14px 0; padding: 12px; }
+    legend { font-weight: 700; }
+    label { display: block; margin: 8px 0 4px; }
+    input[type="text"] { width: 100%; padding: 8px; box-sizing: border-box; }
+    button { padding: 8px 10px; margin: 6px 6px 6px 0; cursor: pointer; }
+    .row { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+    .card { border: 1px solid #ddd; border-radius: 10px; padding: 10px; }
+    .card h3 { margin: 0 0 10px; }
+    pre { background: #f6f6f6; padding: 10px; border-radius: 10px; overflow: auto; }
+    .small { font-size: 0.9rem; color: #555; }
+    .danger { border-color: #ffb3b3; }
+    .ok { border-color: #b3ffb3; }
+  </style>
+</head>
+<body>
+  <h1>Follows UI (Basic)</h1>
+  <p class="note">
+    This page calls your Django follow endpoints using fetch with cookies.
+    Make sure you are logged in first, otherwise you will get 403.
+  </p>
+
+  <fieldset>
+    <legend>Configuration</legend>
+    <label for="baseUrl">Base URL (leave blank if same origin)</label>
+    <input id="baseUrl" type="text" placeholder="Example: http://127.0.0.1:8000" />
+
+    <label for="meUuid">My Author UUID</label>
+    <input id="meUuid" type="text" placeholder="Example: 3fa85f64-5717-4562-b3fc-2c963f66afa6" />
+
+    <button id="btnSave">Save config</button>
+    <span id="saveMsg" class="small"></span>
+  </fieldset>
+
+  <div class="row">
+    <fieldset class="card">
+      <legend>Follow someone (I follow them)</legend>
+
+      <label for="targetFqid">Target Author FQID (full URL)</label>
+      <input id="targetFqid" type="text" placeholder="Example: http://127.0.0.1:8000/api/authors/b" />
+
+      <button id="btnFollow">Follow (PUT)</button>
+      <button id="btnCheckFollowing">Check Following (GET)</button>
+      <button id="btnUnfollow">Unfollow (DELETE)</button>
+
+      <pre id="followOut">{}</pre>
+    </fieldset>
+
+    <fieldset class="card">
+      <legend>Approve/Deny follower (They follow me)</legend>
+
+      <label for="followerFqid">Follower Author FQID (full URL)</label>
+      <input id="followerFqid" type="text" placeholder="Example: http://127.0.0.1:8000/api/authors/a" />
+
+      <button id="btnApprove">Approve (PUT)</button>
+      <button id="btnDeny">Deny (DELETE)</button>
+      <button id="btnCheckFollower">Check Follower (GET)</button>
+
+      <pre id="followerOut">{}</pre>
+    </fieldset>
+  </div>
+
+  <div class="row">
+    <fieldset class="card">
+      <legend>Lists</legend>
+      <button id="btnLoadFollowing">Load Following</button>
+      <button id="btnLoadFollowers">Load Followers</button>
+      <button id="btnLoadRequests">Load Follow Requests</button>
+      <pre id="listsOut">{}</pre>
+    </fieldset>
+
+    <fieldset class="card danger">
+      <legend>Debug / Status</legend>
+      <div class="small">
+        If you see 403, you are not logged in as the author UUID you entered.
+        If you see 404 for a target, the FQID probably does not match an Author.fqid in your DB.
+      </div>
+      <pre id="statusOut">Ready.</pre>
+    </fieldset>
+  </div>
+
+  <script>
+    "use strict";
+
+    function $(id) { return document.getElementById(id); }
+
+    const storeKey = "follows_ui_config_v1";
+
+    function loadConfig() {
+      try {
+        const raw = localStorage.getItem(storeKey);
+        if (!raw) return;
+        const cfg = JSON.parse(raw);
+        $("baseUrl").value = cfg.baseUrl || "";
+        $("meUuid").value = cfg.meUuid || "";
+      } catch (e) {
+        // ignore
+      }
+    }
+
+    function saveConfig() {
+      const cfg = {
+        baseUrl: $("baseUrl").value.trim(),
+        meUuid: $("meUuid").value.trim()
+      };
+      localStorage.setItem(storeKey, JSON.stringify(cfg));
+      $("saveMsg").textContent = "Saved.";
+      setTimeout(() => { $("saveMsg").textContent = ""; }, 1000);
+    }
+
+    function getCfg() {
+      const baseUrl = $("baseUrl").value.trim();
+      const meUuid = $("meUuid").value.trim();
+      if (!meUuid) throw new Error("Set My Author UUID first.");
+      return { baseUrl, meUuid };
+    }
+
+    function encFqid(fqid) {
+      // Percent-encode for putting in the URL path
+      return encodeURIComponent(fqid);
+    }
+
+    function apiUrl(path) {
+      const baseUrl = $("baseUrl").value.trim();
+      if (!baseUrl) return path;
+      return baseUrl.replace(/\/+$/, "") + path;
+    }
+
+    async function apiFetch(method, path) {
+      $("statusOut").textContent = method + " " + path;
+
+      const resp = await fetch(apiUrl(path), {
+        method,
+        credentials: "include", // sends session cookies
+        headers: { "Content-Type": "application/json" }
+      });
+
+      const ct = resp.headers.get("content-type") || "";
+      let bodyText = "";
+      let json = null;
+
+      if (resp.status !== 204) {
+        bodyText = await resp.text();
+        if (ct.includes("application/json")) {
+          try { json = JSON.parse(bodyText); } catch (e) { json = null; }
+        }
+      }
+
+      return { resp, json, bodyText };
+    }
+
+    function show(preId, obj) {
+      $(preId).textContent = typeof obj === "string" ? obj : JSON.stringify(obj, null, 2);
+    }
+
+    async function followPut() {
+      const { meUuid } = getCfg();
+      const fqid = $("targetFqid").value.trim();
+      if (!fqid) throw new Error("Enter target FQID.");
+      const path = `/api/authors/${meUuid}/following/${encFqid(fqid)}`;
+
+      const { resp, json, bodyText } = await apiFetch("PUT", path);
+      show("followOut", json || bodyText || "(no body)");
+      show("statusOut", `Status: ${resp.status}`);
+    }
+
+    async function followGet() {
+      const { meUuid } = getCfg();
+      const fqid = $("targetFqid").value.trim();
+      if (!fqid) throw new Error("Enter target FQID.");
+      const path = `/api/authors/${meUuid}/following/${encFqid(fqid)}`;
+
+      const { resp, json, bodyText } = await apiFetch("GET", path);
+      show("followOut", json || bodyText || "(no body)");
+      show("statusOut", `Status: ${resp.status}`);
+    }
+
+    async function followDelete() {
+      const { meUuid } = getCfg();
+      const fqid = $("targetFqid").value.trim();
+      if (!fqid) throw new Error("Enter target FQID.");
+      const path = `/api/authors/${meUuid}/following/${encFqid(fqid)}`;
+
+      const { resp, json, bodyText } = await apiFetch("DELETE", path);
+      show("followOut", json || bodyText || "(no body)");
+      show("statusOut", `Status: ${resp.status}`);
+    }
+
+    async function approvePut() {
+      const { meUuid } = getCfg();
+      const fqid = $("followerFqid").value.trim();
+      if (!fqid) throw new Error("Enter follower FQID.");
+      const path = `/api/authors/${meUuid}/followers/${encFqid(fqid)}`;
+
+      const { resp, json, bodyText } = await apiFetch("PUT", path);
+      show("followerOut", json || bodyText || "(no body)");
+      show("statusOut", `Status: ${resp.status}`);
+    }
+
+    async function denyDelete() {
+      const { meUuid } = getCfg();
+      const fqid = $("followerFqid").value.trim();
+      if (!fqid) throw new Error("Enter follower FQID.");
+      const path = `/api/authors/${meUuid}/followers/${encFqid(fqid)}`;
+
+      const { resp, json, bodyText } = await apiFetch("DELETE", path);
+      show("followerOut", json || bodyText || "(no body)");
+      show("statusOut", `Status: ${resp.status}`);
+    }
+
+    async function followerGet() {
+      const { meUuid } = getCfg();
+      const fqid = $("followerFqid").value.trim();
+      if (!fqid) throw new Error("Enter follower FQID.");
+      const path = `/api/authors/${meUuid}/followers/${encFqid(fqid)}`;
+
+      const { resp, json, bodyText } = await apiFetch("GET", path);
+      show("followerOut", json || bodyText || "(no body)");
+      show("statusOut", `Status: ${resp.status}`);
+    }
+
+    async function loadFollowing() {
+      const { meUuid } = getCfg();
+      const path = `/api/authors/${meUuid}/following`;
+      const { resp, json, bodyText } = await apiFetch("GET", path);
+      show("listsOut", json || bodyText || "(no body)");
+      show("statusOut", `Status: ${resp.status}`);
+    }
+
+    async function loadFollowers() {
+      const { meUuid } = getCfg();
+      const path = `/api/authors/${meUuid}/followers`;
+      const { resp, json, bodyText } = await apiFetch("GET", path);
+      show("listsOut", json || bodyText || "(no body)");
+      show("statusOut", `Status: ${resp.status}`);
+    }
+
+    async function loadRequests() {
+      const { meUuid } = getCfg();
+      const path = `/api/authors/${meUuid}/follow_requests`;
+      const { resp, json, bodyText } = await apiFetch("GET", path);
+      show("listsOut", json || bodyText || "(no body)");
+      show("statusOut", `Status: ${resp.status}`);
+    }
+
+    function wire() {
+      $("btnSave").addEventListener("click", () => {
+        saveConfig();
+      });
+
+      $("btnFollow").addEventListener("click", async () => {
+        try { await followPut(); } catch (e) { show("statusOut", String(e)); }
+      });
+
+      $("btnCheckFollowing").addEventListener("click", async () => {
+        try { await followGet(); } catch (e) { show("statusOut", String(e)); }
+      });
+
+      $("btnUnfollow").addEventListener("click", async () => {
+        try { await followDelete(); } catch (e) { show("statusOut", String(e)); }
+      });
+
+      $("btnApprove").addEventListener("click", async () => {
+        try { await approvePut(); } catch (e) { show("statusOut", String(e)); }
+      });
+
+      $("btnDeny").addEventListener("click", async () => {
+        try { await denyDelete(); } catch (e) { show("statusOut", String(e)); }
+      });
+
+      $("btnCheckFollower").addEventListener("click", async () => {
+        try { await followerGet(); } catch (e) { show("statusOut", String(e)); }
+      });
+
+      $("btnLoadFollowing").addEventListener("click", async () => {
+        try { await loadFollowing(); } catch (e) { show("statusOut", String(e)); }
+      });
+
+      $("btnLoadFollowers").addEventListener("click", async () => {
+        try { await loadFollowers(); } catch (e) { show("statusOut", String(e)); }
+      });
+
+      $("btnLoadRequests").addEventListener("click", async () => {
+        try { await loadRequests(); } catch (e) { show("statusOut", String(e)); }
+      });
+    }
+
+    loadConfig();
+    wire();
+  </script>
+</body>
+</html>

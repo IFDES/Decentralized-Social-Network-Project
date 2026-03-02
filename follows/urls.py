@@ -7,4 +7,5 @@ urlpatterns = [
     path("api/authors/<uuid:author_serial>/followers", views.followers_list),
     path("api/authors/<uuid:author_serial>/followers/<path:foreign_author_fqid>", views.followers_detail),
     path("api/authors/<uuid:author_serial>/follow_requests", views.follow_requests_list),
+    path("follows/ui", views.follow_ui_page),
 ]

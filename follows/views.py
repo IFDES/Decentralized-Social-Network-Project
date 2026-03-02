@@ -1,6 +1,5 @@
 import json
 from urllib.parse import unquote
-
 from django.http import (
     HttpRequest,
     JsonResponse,
@@ -8,64 +7,54 @@ from django.http import (
     HttpResponseForbidden,
     HttpResponse,
 )
-from django.shortcuts import get_object_or_404
+from django.shortcuts import get_object_or_404, render
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
-
 from authors.models import Author
 from config.core.serializers import author_to_json
 from config.core.permissions import user_matches_author_uuid
-
 from .models import FollowRelationship
 
+from django.contrib.auth.decorators import login_required
+
+@login_required
+def follow_ui_page(request):
+    return render(request, "follows/follow_ui.html")
 
 def _decode_fqid(encoded: str) -> str:
-    # Many endpoints include the foreign author's ID in the URL path.
-    # The project spec represents author IDs as full URLs (FQIDs), which contain "/" and ":".
-    
-    # Since "/" cannot appear raw inside most path segments, clients percent-encode the FQID:
-    #   http%3A%2F%2Fnode%2Fapi%2Fauthors%2F<uuid>
-    
-    # We decode it back to the original URL so we can look up Author.fqid.
+    # Many endpoints include the foreign author's ID in the URL path
+    # The project spec represents author IDs as full URLs (FQIDs), which contain "/" and ":"
+
+    # Since "/" cannot appear raw inside most path segments, clients percent-encode the FQID, we decode it back to the original URL so we can look up Author.fqid
     return unquote(encoded)
 
-
+# Shared authorization guard for author-scoped endpoints
 def _require_owner_or_403(request: HttpRequest, author_uuid):
-    # Shared authorization guard for author-scoped endpoints.
-    #
-    # These endpoints must only be usable by the logged-in user who owns <author_uuid>.
-    # If not, return a 403 response. If yes, return None so the caller can continue.
+    # Endpoints must only be usable by a logged-in user, otherwise return a 403 response
     if not user_matches_author_uuid(request, author_uuid):
         return HttpResponseForbidden("Not authorized for this author.")
     return None
 
-
+# Serialize a FollowRelationship as the spec-style "follow request object".
 def follow_to_json(rel: FollowRelationship) -> dict:
-    # Serialize a FollowRelationship as the spec-style "follow request object".
-    #
-    # Important detail:
-    # - We store internal statuses as PENDING/APPROVED/DENIED in the database.
-    # - The spec wants external state values as requesting/accepted/rejected.
-    #   The model exposes rel.state to map status -> state.
+    # We store internal statuses as PENDING/APPROVED/DENIED in the database
+    # The spec wants external state values as requesting/accepted/rejected
+    # The model exposes rel.state to map status -> state.
     return {
         "type": "follow",
         "summary": f"{rel.follower.display_name} wants to follow {rel.followee.display_name}",
         "state": rel.state,
-        "actor": author_to_json(rel.follower),  # follower is the actor (the requester)
-        "object": author_to_json(rel.followee),  # followee is the object (the target)
+        "actor": author_to_json(rel.follower),
+        "object": author_to_json(rel.followee),
     }
-
 
 @csrf_exempt
 @require_http_methods(["GET"])
 def following_list(request: HttpRequest, author_serial):
     # GET /api/authors/<me>/following
-    #
     # Returns the list of authors that <me> is following from <me>'s perspective.
-    # We include both:
-    # - PENDING: follow requested (still counts as "I'm following" in the UI)
-    # - APPROVED: follow accepted
-    #
+    # We include both PENDING and APPROVED
+
     # This endpoint is author-owned: only <me> can view their own following list.
     me = get_object_or_404(Author, uuid=author_serial, is_deleted=False)
     forbidden = _require_owner_or_403(request, me.uuid)
