@@ -7,6 +7,7 @@ from django.http import HttpRequest, HttpResponseBadRequest, HttpResponseForbidd
 from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
+from django.contrib.auth.decorators import login_required
 
 from config.core.permissions import user_matches_author_uuid
 from follows.models import FollowRelationship
@@ -182,3 +183,18 @@ def author_profile_api(request: HttpRequest, author_id: UUID):
 
     form.save()
     return JsonResponse(_author_to_dict(request, author))
+
+@login_required
+def my_profile_redirect(request: HttpRequest):
+    # request.user is the logged-in Django User.
+    # AuthorAccount links User -> Author for your site.
+    acct = getattr(request.user, "author_account", None)
+
+    # If logged in but not linked to an Author yet, send them somewhere helpful.
+    # You can change this to a "create author" page later.
+    if not acct or not getattr(acct, "author", None):
+        return redirect("/")
+
+    # Redirect to the existing author profile page route:
+    # /authors/<uuid>
+    return redirect("authors:profile", author_id=acct.author.uuid)

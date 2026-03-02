@@ -3,9 +3,22 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <form action="{% url 'entries:stream-page' %}" method="get">
-    <button type="submit">Back to stream</button>
-  </form>
+  <style>
+    .button-row {
+      display: flex;
+      gap: 10px;
+    }
+  </style>
+  <div class="button-row">
+    <form action="{% url 'entries:stream-page' %}" method="get">
+      <button type="submit">Back to stream</button>
+    </form>
+    {% if is_owner %}
+      <form action="{% url 'follows:follow-ui' %}" method="get">
+        <button type="submit">Go to follows</button>
+      </form>
+    {% endif %}
+  </div>
   <title>{{ author.display_name }}</title>
 </head>
 <body>
