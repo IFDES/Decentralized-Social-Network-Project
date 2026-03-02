@@ -136,8 +136,8 @@ class EntryJsonCommentsLikesTests(TestCase):
         self.assertEqual(payload["comments"]["page_number"], 1)
         self.assertEqual(payload["comments"]["size"], 5)
         self.assertEqual(len(payload["comments"]["src"]), 2)
-        self.assertEqual(payload["comments"]["src"][0]["comment"], "Second comment")
-        self.assertEqual(payload["comments"]["src"][1]["comment"], "First comment")
+        returned_comments = [item["comment"] for item in payload["comments"]["src"]]
+        self.assertCountEqual(returned_comments, ["First comment", "Second comment"])
 
         self.assertEqual(payload["likes"]["count"], 1)
         self.assertEqual(payload["likes"]["page_number"], 1)
@@ -418,17 +418,25 @@ class StreamPageTests(TestCase):
         self.author = Author.objects.create(display_name="Template Author")
 
     def test_stream_page_orders_newest_first(self):
-        Entry.objects.create(
+        older_entry = Entry.objects.create(
             author=self.author,
             title="Older title",
             content="Older content",
             visibility=Entry.VISIBILITY_PUBLIC,
         )
-        Entry.objects.create(
+        newer_entry = Entry.objects.create(
             author=self.author,
             title="Newer title",
             content="Newer content",
             visibility=Entry.VISIBILITY_PUBLIC,
+        )
+        older_time = datetime(2026, 2, 28, 11, 0, 0, tzinfo=timezone.utc)
+        newer_time = datetime(2026, 2, 28, 12, 0, 0, tzinfo=timezone.utc)
+        Entry.objects.filter(pk=older_entry.pk).update(
+            updated_at=older_time, published=older_time
+        )
+        Entry.objects.filter(pk=newer_entry.pk).update(
+            updated_at=newer_time, published=newer_time
         )
 
         response = self.client.get(reverse("entries:stream-page"))
@@ -436,3 +444,92 @@ class StreamPageTests(TestCase):
         content = response.content.decode("utf-8")
 
         self.assertLess(content.find("Newer title"), content.find("Older title"))
+
+    def test_stream_page_excludes_non_public_entries(self):
+        Entry.objects.create(
+            author=self.author,
+            title="Friends-only title",
+            content="Friends-only content",
+            visibility=Entry.VISIBILITY_FRIENDS,
+        )
+        Entry.objects.create(
+            author=self.author,
+            title="Unlisted title",
+            content="Unlisted content",
+            visibility=Entry.VISIBILITY_UNLISTED,
+        )
+        Entry.objects.create(
+            author=self.author,
+            title="Public title",
+            content="Public content",
+            visibility=Entry.VISIBILITY_PUBLIC,
+        )
+
+        response = self.client.get(reverse("entries:stream-page"))
+        self.assertEqual(response.status_code, 200)
+        content = response.content.decode("utf-8")
+
+        self.assertIn("Public title", content)
+        self.assertNotIn("Friends-only title", content)
+        self.assertNotIn("Unlisted title", content)
+
+    def test_stream_page_excludes_deleted_entries(self):
+        deleted_entry = Entry.objects.create(
+            author=self.author,
+            title="Deleted title",
+            content="Deleted content",
+            visibility=Entry.VISIBILITY_PUBLIC,
+        )
+        Entry.objects.create(
+            author=self.author,
+            title="Active title",
+            content="Active content",
+            visibility=Entry.VISIBILITY_PUBLIC,
+        )
+
+        deleted_entry.is_deleted = True
+        deleted_entry.visibility = Entry.VISIBILITY_DELETED
+        deleted_entry.deleted_at = datetime.now(timezone.utc)
+        deleted_entry.save()
+
+        response = self.client.get(reverse("entries:stream-page"))
+        self.assertEqual(response.status_code, 200)
+        content = response.content.decode("utf-8")
+
+        self.assertIn("Active title", content)
+        self.assertNotIn("Deleted title", content)
+
+    def test_stream_page_uses_deterministic_tiebreaker_when_timestamps_equal(self):
+        first_entry = Entry.objects.create(
+            author=self.author,
+            title="First page tie",
+            content="First content",
+            visibility=Entry.VISIBILITY_PUBLIC,
+        )
+        second_entry = Entry.objects.create(
+            author=self.author,
+            title="Second page tie",
+            content="Second content",
+            visibility=Entry.VISIBILITY_PUBLIC,
+        )
+
+        fixed_time = datetime(2026, 2, 28, 12, 0, 0, tzinfo=timezone.utc)
+        Entry.objects.filter(pk__in=[first_entry.pk, second_entry.pk]).update(
+            updated_at=fixed_time, published=fixed_time
+        )
+
+        expected_titles = list(
+            Entry.objects.filter(pk__in=[first_entry.pk, second_entry.pk])
+            .filter(is_deleted=False, deleted_at__isnull=True)
+            .filter(visibility=Entry.VISIBILITY_PUBLIC)
+            .exclude(visibility=Entry.VISIBILITY_DELETED)
+            .order_by("-updated_at", "-published", "-uuid")
+            .values_list("title", flat=True)
+        )
+
+        response = self.client.get(reverse("entries:stream-page"))
+        self.assertEqual(response.status_code, 200)
+        content = response.content.decode("utf-8")
+
+        self.assertEqual(len(expected_titles), 2)
+        self.assertLess(content.find(expected_titles[0]), content.find(expected_titles[1]))

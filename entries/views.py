@@ -108,6 +108,12 @@ def _entry_to_json(entry: Entry) -> dict:
 
 
 def _stream_entries_queryset():
+    """
+    Canonical stream queryset used by both HTML and API stream endpoints.
+
+    "Known to this node" currently means entries present in this node's Entry
+    table (local entries, plus any remote entries if/when they are stored here).
+    """
     return (
         Entry.objects.filter(is_deleted=False, deleted_at__isnull=True)
         .filter(visibility=Entry.VISIBILITY_PUBLIC)

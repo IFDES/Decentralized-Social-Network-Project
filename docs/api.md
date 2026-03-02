@@ -143,6 +143,7 @@ Use this template for endpoints like `GET /api/authors/{AUTHOR_SERIAL}/` or `GET
 
 - **Purpose**: Template-rendered stream page for a consolidated feed.
 - **Behaviour**: node-wide PUBLIC discovery stream for entries known by this node.
+- **Query logic parity**: Uses the same filters and ordering as `GET /api/stream`.
 
 ### GET /api/stream
 
@@ -169,7 +170,8 @@ Entries with `visibility = DELETED` are also excluded from stream results.
 
 #### Entries included in this implementation
 
-- Always includes `PUBLIC` entries from local authors.
+- Includes all `PUBLIC` entries this node currently knows about via the local `Entry` store.
+  This covers local entries and also covers remote entries if/when they are ingested and stored as `Entry` rows.
 - Excludes all non-public entries (`FRIENDS`, `UNLISTED`, and any equivalent private visibility values).
 - Relationship-based visibility (follows/friends) is not implemented in this repo yet, so no additional relationship visibility is applied.
 - Non-public entries are excluded for all viewers.
