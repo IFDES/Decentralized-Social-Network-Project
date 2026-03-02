@@ -31,27 +31,41 @@
   </p>
 
   <h3>Likes ({{ like_count }})</h3>
-  {% if current_user_has_liked %}
-    <form action="{% url 'entries:entry-unlike' author.uuid entry.uuid %}" method="post" style="display:inline;">
-      {% csrf_token %}
-      {% if not current_author %}
-        <input type="hidden" name="author_id" value="{{ authors.0.uuid }}">
-      {% endif %}
-      <button type="submit">Unlike</button>
-    </form>
+  {% if current_author %}
+    {% if current_user_has_liked %}
+      <form action="{% url 'entries:entry-unlike' author.uuid entry.uuid %}" method="post" style="display:inline;">
+        {% csrf_token %}
+        <button type="submit">Unlike</button>
+      </form>
+    {% else %}
+      <form action="{% url 'entries:entry-like' author.uuid entry.uuid %}" method="post" style="display:inline;">
+        {% csrf_token %}
+        <button type="submit">Like</button>
+      </form>
+    {% endif %}
   {% else %}
-    <form action="{% url 'entries:entry-like' author.uuid entry.uuid %}" method="post" style="display:inline;">
-      {% csrf_token %}
-      {% if not current_author and authors %}
+    {% if authors %}
+      <form action="{% url 'entries:entry-like' author.uuid entry.uuid %}" method="post" style="display:inline;">
+        {% csrf_token %}
         <label for="like_author_id">Like as:</label>
         <select name="author_id" id="like_author_id" required>
           {% for a in authors %}
             <option value="{{ a.uuid }}">{{ a.display_name }}</option>
           {% endfor %}
         </select>
-      {% endif %}
-      <button type="submit">Like</button>
-    </form>
+        <button type="submit">Like</button>
+      </form>
+      <form action="{% url 'entries:entry-unlike' author.uuid entry.uuid %}" method="post" style="display:inline;">
+        {% csrf_token %}
+        <label for="unlike_author_id">Unlike as:</label>
+        <select name="author_id" id="unlike_author_id" required>
+          {% for a in authors %}
+            <option value="{{ a.uuid }}">{{ a.display_name }}</option>
+          {% endfor %}
+        </select>
+        <button type="submit">Unlike</button>
+      </form>
+    {% endif %}
   {% endif %}
 
   <h3>Comments</h3>
