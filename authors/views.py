@@ -9,9 +9,10 @@ from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 
 from config.core.permissions import user_matches_author_uuid
+from follows.models import FollowRelationship
 
 from .forms import AuthorProfileForm
-from .models import Author
+from .models import Author, AuthorAccount
 
 
 def _author_api_id(request: HttpRequest, author: Author) -> str:
@@ -37,26 +38,67 @@ def _author_to_dict(request: HttpRequest, author: Author) -> dict:
     }
 
 
-def _get_public_entries(author: Author) -> list:
+def _get_current_author(request: HttpRequest) -> Author | None:
+    user = getattr(request, "user", None)
+    if not user or not getattr(user, "is_authenticated", False):
+        return None
     try:
-        post_model = apps.get_model("entries", "Entry")
+        account = AuthorAccount.objects.select_related("author").get(user=user)
+        if account.author and not account.author.is_deleted:
+            return account.author
+    except AuthorAccount.DoesNotExist:
+        return None
+    return None
+
+
+def _are_friends(a: Author, b: Author) -> bool:
+    """
+    Only if they mutually follow each other
+    """
+    return FollowRelationship.objects.filter(
+        follower=a,
+        followee=b,
+        status=FollowRelationship.Status.APPROVED,
+    ).exists() and FollowRelationship.objects.filter(
+        follower=b,
+        followee=a,
+        status=FollowRelationship.Status.APPROVED,
+    ).exists()
+
+
+def _get_profile_entries(request: HttpRequest, author: Author) -> list:
+    try:
+        entry_model = apps.get_model("entries", "Entry")
     except LookupError:
         return []
 
-    if post_model is None:
+    if entry_model is None or not hasattr(entry_model, "author"):
         return []
 
-    if not hasattr(post_model, "author"):
-        return []
+    viewer = _get_current_author(request)
 
-    queryset = post_model.objects.filter(author=author)
-    if hasattr(post_model, "visibility"):
-        queryset = queryset.filter(visibility="PUBLIC")
-    if hasattr(post_model, "is_deleted"):
+    queryset = entry_model.objects.filter(author=author)
+
+    if hasattr(entry_model, "is_deleted"):
         queryset = queryset.filter(is_deleted=False)
-    if hasattr(post_model, "published"):
+
+    # rules:
+    # - if viewer is the profile owner: show PUBLIC + FRIENDS + UNLISTED
+    # - else if viewer is a friend: show PUBLIC + FRIENDS
+    # - else: PUBLIC only
+    if hasattr(entry_model, "visibility"):
+        if viewer and viewer.uuid == author.uuid:
+            queryset = queryset.exclude(visibility=entry_model.VISIBILITY_DELETED)
+        elif viewer and _are_friends(viewer, author):
+            queryset = queryset.filter(
+                visibility__in=[entry_model.VISIBILITY_PUBLIC, entry_model.VISIBILITY_FRIENDS]
+            )
+        else:
+            queryset = queryset.filter(visibility=entry_model.VISIBILITY_PUBLIC)
+
+    if hasattr(entry_model, "published"):
         queryset = queryset.order_by("-published")
-    elif hasattr(post_model, "created_at"):
+    elif hasattr(entry_model, "created_at"):
         queryset = queryset.order_by("-created_at")
     else:
         queryset = queryset.order_by("-pk")
@@ -66,14 +108,20 @@ def _get_public_entries(author: Author) -> list:
 
 def author_profile_page(request: HttpRequest, author_id: UUID):
     author = get_object_or_404(Author, pk=author_id, is_deleted=False)
-    public_entries = _get_public_entries(author)
+    entries = _get_profile_entries(request, author)
+
+    viewer = _get_current_author(request)
+    is_owner = bool(viewer and viewer.uuid == author.uuid)
+    is_friend = bool(viewer and viewer.uuid != author.uuid and _are_friends(viewer, author))
 
     return render(
         request,
         "authors/profile.html",
         {
             "author": author,
-            "public_entries": public_entries,
+            "entries": entries,
+            "is_owner": is_owner,
+            "is_friend": is_friend,
         },
     )
 
