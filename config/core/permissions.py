@@ -9,29 +9,17 @@ def user_is_authenticated(request: HttpRequest) -> bool:
     return bool(user and getattr(user, "is_authenticated", False))
 
 
-def user_owns_author(request: HttpRequest, author) -> bool:
-    """
-    Ownership check for author profile edits.
+# def user_owns_author(request: HttpRequest, author) -> bool:
+#     """
+#     Ownership check for author profile edits.
 
-    """
-    if not user_is_authenticated(request):
-        return False
-    acct = getattr(request.user, "author_account", None)
-    if not acct or not getattr(acct, "author", None):
-        return False
-    return acct.author.uuid == author.uuid
-
-
-def user_owns_object_via_author(request: HttpRequest, obj) -> bool:
-    """
-    Ownership check for objects that have an 'author' relation (entries,
-    comments, etc.). This lets feature apps call one place for "does the
-    current user own this thing?".
-    """
-    author = getattr(obj, "author", None)
-    if author is None:
-        return False
-    return user_owns_author(request, author)
+#     """
+#     if not user_is_authenticated(request):
+#         return False
+#     acct = getattr(request.user, "author_account", None)
+#     if not acct or not getattr(acct, "author", None):
+#         return False
+#     return acct.author.uuid == author.uuid
 
 def user_matches_author_uuid(request: HttpRequest, author_uuid) -> bool:
     # Ownership check for endpoints that take an author UUID in the URL
@@ -53,3 +41,14 @@ def user_matches_author_uuid(request: HttpRequest, author_uuid) -> bool:
 
     # Allow if the user's Author UUID matches the UUID in the URL
     return acct.author.uuid == author_uuid
+
+def user_owns_object_via_author(request: HttpRequest, obj) -> bool:
+    """
+    Ownership check for objects that have an 'author' relation (entries,
+    comments, etc.). This lets feature apps call one place for "does the
+    current user own this thing?".
+    """
+    author = getattr(obj, "author", None)
+    if author is None:
+        return False
+    return user_matches_author_uuid(request, author)
