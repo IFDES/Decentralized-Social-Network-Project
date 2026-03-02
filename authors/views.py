@@ -8,6 +8,8 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 
+from config.core.permissions import user_matches_author_uuid
+
 from .forms import AuthorProfileForm
 from .models import Author
 
@@ -79,6 +81,8 @@ def author_profile_page(request: HttpRequest, author_id: UUID):
 @require_http_methods(["GET", "POST"])
 def edit_author_profile_page(request: HttpRequest, author_id: UUID):
     author = get_object_or_404(Author, pk=author_id, is_deleted=False)
+    if not user_matches_author_uuid(request, author.uuid):
+        return HttpResponseForbidden("Not authorized for this author.")
 
     if request.method == "POST":
         form = AuthorProfileForm(request.POST, instance=author)
@@ -105,6 +109,9 @@ def author_profile_api(request: HttpRequest, author_id: UUID):
 
     if request.method == "GET":
         return JsonResponse(_author_to_dict(request, author))
+
+    if not user_matches_author_uuid(request, author.uuid):
+        return HttpResponseForbidden("Not authorized for this author.")
 
     if not author.is_local:
         return HttpResponseForbidden("Only local authors can be updated.")

@@ -17,6 +17,7 @@ from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 
 from authors.models import Author, AuthorAccount
+from config.core.permissions import user_matches_author_uuid
 
 from interactions.models import Comment, EntryLike
 from interactions.serializers import comments_list_json, likes_list_json
@@ -279,6 +280,8 @@ def entry_unlike_page(
 @require_http_methods(["GET", "POST"])
 def entry_create_page(request: HttpRequest, author_id: UUID) -> HttpResponse:
     author = get_object_or_404(Author, pk=author_id, is_deleted=False)
+    if not user_matches_author_uuid(request, author.uuid):
+        return HttpResponseForbidden("Not authorized for this author.")
 
     if request.method == "POST":
         form = EntryForm(request.POST)
@@ -306,6 +309,8 @@ def entry_edit_page(
     request: HttpRequest, author_id: UUID, entry_id: UUID
 ) -> HttpResponse:
     author = get_object_or_404(Author, pk=author_id, is_deleted=False)
+    if not user_matches_author_uuid(request, author.uuid):
+        return HttpResponseForbidden("Not authorized for this author.")
     entry = get_object_or_404(
         Entry,
         pk=entry_id,
@@ -338,6 +343,8 @@ def entry_delete_page(
     request: HttpRequest, author_id: UUID, entry_id: UUID
 ) -> HttpResponse:
     author = get_object_or_404(Author, pk=author_id, is_deleted=False)
+    if not user_matches_author_uuid(request, author.uuid):
+        return HttpResponseForbidden("Not authorized for this author.")
     entry = get_object_or_404(
         Entry,
         pk=entry_id,
@@ -441,6 +448,9 @@ def author_entries_api(request: HttpRequest, author_id: UUID) -> HttpResponse:
         )
 
     # POST: create a new entry
+    if not user_matches_author_uuid(request, author.uuid):
+        return HttpResponseForbidden("Not authorized for this author.")
+
     try:
         payload = _parse_json_body(request)
     except ValueError as exc:
@@ -488,6 +498,9 @@ def entry_detail_api(
             return HttpResponseBadRequest("Entry has been deleted.")
         return JsonResponse(_entry_to_json(entry))
 
+    if not user_matches_author_uuid(request, author.uuid):
+        return HttpResponseForbidden("Not authorized for this author.")
+
     if request.method == "PUT":
         if entry.is_deleted or entry.visibility == Entry.VISIBILITY_DELETED:
             return HttpResponseBadRequest("Cannot edit a deleted entry.")
@@ -529,4 +542,3 @@ def entry_detail_api(
     entry.deleted_at = datetime.now(timezone.utc)
     entry.save()
     return HttpResponse(status=204)
-

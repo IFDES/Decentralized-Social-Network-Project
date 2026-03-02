@@ -14,7 +14,12 @@ def user_owns_author(request: HttpRequest, author) -> bool:
     Ownership check for author profile edits.
 
     """
-    return user_is_authenticated(request)
+    if not user_is_authenticated(request):
+        return False
+    acct = getattr(request.user, "author_account", None)
+    if not acct or not getattr(acct, "author", None):
+        return False
+    return acct.author.uuid == author.uuid
 
 
 def user_owns_object_via_author(request: HttpRequest, obj) -> bool:

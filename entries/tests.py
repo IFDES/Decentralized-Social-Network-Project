@@ -2,10 +2,11 @@ import json
 
 from datetime import datetime, timezone
 
+from django.contrib.auth.models import User
 from django.test import Client, TestCase
 from django.urls import reverse
 
-from authors.models import Author
+from authors.models import Author, AuthorAccount
 from entries.models import Entry
 from interactions.models import Comment, EntryLike
 
@@ -35,8 +36,14 @@ class EntryApiTests(TestCase):
     def setUp(self):
         self.client = Client()
         self.author = Author.objects.create(display_name="Test Author")
+        self.other_author = Author.objects.create(display_name="Other Author")
+        self.owner_user = User.objects.create_user(username="entry_owner", password="passA12345")
+        self.other_user = User.objects.create_user(username="entry_other", password="passB12345")
+        AuthorAccount.objects.create(user=self.owner_user, author=self.author)
+        AuthorAccount.objects.create(user=self.other_user, author=self.other_author)
 
     def test_create_and_list_entries_api(self):
+        self.client.login(username="entry_owner", password="passA12345")
         url = reverse("entries:author-entries-api", args=[self.author.uuid])
         response = self.client.post(
             url,
@@ -60,6 +67,7 @@ class EntryApiTests(TestCase):
 
     def test_soft_delete_entry_via_api(self):
         entry = Entry.objects.create(author=self.author, content="To delete")
+        self.client.login(username="entry_owner", password="passA12345")
         url = reverse(
             "entries:entry-detail-api", args=[self.author.uuid, entry.uuid]
         )
@@ -68,6 +76,29 @@ class EntryApiTests(TestCase):
 
         entry.refresh_from_db()
         self.assertTrue(entry.is_deleted)
+
+    def test_mutation_rejects_non_owner(self):
+        entry = Entry.objects.create(author=self.author, content="Protected")
+        self.client.login(username="entry_other", password="passB12345")
+
+        create_url = reverse("entries:author-entries-api", args=[self.author.uuid])
+        create_response = self.client.post(
+            create_url,
+            data=json.dumps({"content": "Nope", "contentType": "text/plain", "visibility": "PUBLIC"}),
+            content_type="application/json",
+        )
+        self.assertEqual(create_response.status_code, 403)
+
+        detail_url = reverse("entries:entry-detail-api", args=[self.author.uuid, entry.uuid])
+        edit_response = self.client.put(
+            detail_url,
+            data=json.dumps({"content": "Nope", "contentType": "text/plain", "visibility": "PUBLIC"}),
+            content_type="application/json",
+        )
+        self.assertEqual(edit_response.status_code, 403)
+
+        delete_response = self.client.delete(detail_url)
+        self.assertEqual(delete_response.status_code, 403)
 
 
 class EntryJsonCommentsLikesTests(TestCase):
@@ -139,6 +170,10 @@ class StreamApiTests(TestCase):
         self.client = Client()
         self.author = Author.objects.create(display_name="Stream Author")
         self.other_author = Author.objects.create(display_name="Other Author")
+        self.owner_user = User.objects.create_user(username="stream_owner", password="passA12345")
+        self.other_user = User.objects.create_user(username="stream_other", password="passB12345")
+        AuthorAccount.objects.create(user=self.owner_user, author=self.author)
+        AuthorAccount.objects.create(user=self.other_user, author=self.other_author)
 
     def test_stream_includes_created_entry(self):
         Entry.objects.create(
@@ -240,6 +275,7 @@ class StreamApiTests(TestCase):
         )
 
         edit_url = reverse("entries:entry-detail-api", args=[self.author.uuid, entry.uuid])
+        self.client.login(username="stream_owner", password="passA12345")
         edit_response = self.client.put(
             edit_url,
             data=json.dumps(
@@ -278,6 +314,7 @@ class StreamApiTests(TestCase):
         )
 
         delete_url = reverse("entries:entry-detail-api", args=[self.author.uuid, entry.uuid])
+        self.client.login(username="stream_owner", password="passA12345")
         delete_response = self.client.delete(delete_url)
         self.assertEqual(delete_response.status_code, 204)
 
@@ -399,4 +436,3 @@ class StreamPageTests(TestCase):
         content = response.content.decode("utf-8")
 
         self.assertLess(content.find("Newer title"), content.find("Older title"))
-

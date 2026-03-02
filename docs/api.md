@@ -7,6 +7,23 @@
   - **Local** (browser / same node): Django session (login form) or whatever the team chooses.
   - **Remote** (node-to-node): HTTP Basic Auth as required by the project spec (to be wired in later project parts).
 
+## Authorization (owner-scoped mutations)
+
+For local endpoints that mutate author-owned resources, the caller must be authenticated
+as the same author in the URL (`AuthorAccount.author.uuid == AUTHOR_SERIAL`).
+
+If this ownership check fails, the server returns `403 Forbidden`.
+
+Protected operations include:
+- `POST /api/authors/{AUTHOR_SERIAL}/entries`
+- `PUT /api/authors/{AUTHOR_SERIAL}/entries/{ENTRY_SERIAL}`
+- `DELETE /api/authors/{AUTHOR_SERIAL}/entries/{ENTRY_SERIAL}`
+- `POST /authors/{AUTHOR_SERIAL}/entries/new/`
+- `GET|POST /authors/{AUTHOR_SERIAL}/entries/{ENTRY_SERIAL}/edit/`
+- `GET|POST /authors/{AUTHOR_SERIAL}/entries/{ENTRY_SERIAL}/delete/`
+- `PUT /api/authors/{AUTHOR_SERIAL}`
+- `GET|POST /authors/{AUTHOR_SERIAL}/edit`
+
 All API objects use **FQIDs** (fully qualified IDs) in their `id` fields, e.g.:
 
 - Author: `{BASE_URL}/api/authors/{AUTHOR_SERIAL}`
@@ -385,4 +402,3 @@ Likes are per (author, entry); at most one like per author per entry.
 #### Response
 
 - **Status**: `204 No Content` on success. `400 Bad Request` if author cannot be resolved. If there was no like, `204` is still returned.
-
