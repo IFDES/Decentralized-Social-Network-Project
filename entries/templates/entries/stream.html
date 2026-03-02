@@ -31,7 +31,7 @@
         <li class="stream-entry">
           <h2>{{ entry.title|default:"Untitled entry" }}</h2>
 
-          <p><strong>Author:</strong> {{ entry.author.display_name }}</p>
+          <p><strong>Author:</strong> <a href="{% url 'authors:profile' entry.author.uuid %}">{{ entry.author.display_name }}</a></p>
           <p><strong>Content Type:</strong> {{ entry.content_type }}</p>
           <p><strong>Visibility:</strong> {{ entry.visibility }}</p>
 
