@@ -4,25 +4,58 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Stream</title>
+
+  <style>
+    .entry-markdown {
+      max-width: 100%;
+    }
+    .entry-markdown p {
+      white-space: normal;
+    }
+    .stream-entry {
+      margin-bottom: 2em;
+      padding-bottom: 1em;
+      border-bottom: 1px solid #ddd;
+    }
+  </style>
 </head>
 <body>
+  {% load markdown_extras %}
+
   <h1>Stream</h1>
   <p>Node-wide PUBLIC discovery stream</p>
 
   {% if entries %}
-    <ul>
+    <ul style="list-style: none; padding-left: 0;">
       {% for entry in entries %}
-        <li>
+        <li class="stream-entry">
           <h2>{{ entry.title|default:"Untitled entry" }}</h2>
+
           <p><strong>Author:</strong> {{ entry.author.display_name }}</p>
           <p><strong>Content Type:</strong> {{ entry.content_type }}</p>
           <p><strong>Visibility:</strong> {{ entry.visibility }}</p>
-          <p>{{ entry.content }}</p>
+
+          {% if entry.content_type == "text/markdown" %}
+            <div class="entry-markdown">
+              {{ entry.content|render_markdown|safe }}
+            </div>
+          {% else %}
+            <pre>{{ entry.content }}</pre>
+          {% endif %}
+
           <p><strong>Published:</strong> {{ entry.published }}</p>
           <p><strong>Updated:</strong> {{ entry.updated_at }}</p>
-          <p>{{ entry.like_count }} like{{ entry.like_count|pluralize }} · {{ entry.comment_count }} comment{{ entry.comment_count|pluralize }}</p>
+
           <p>
-            <a href="{% url 'entries:entry-detail' entry.author.uuid entry.uuid %}">View entry</a>
+            {{ entry.like_count }} like{{ entry.like_count|pluralize }}
+            ·
+            {{ entry.comment_count }} comment{{ entry.comment_count|pluralize }}
+          </p>
+
+          <p>
+            <a href="{% url 'entries:entry-detail' entry.author.uuid entry.uuid %}">
+              View entry
+            </a>
           </p>
         </li>
       {% endfor %}

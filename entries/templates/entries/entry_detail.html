@@ -3,15 +3,20 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <form action="{% url 'entries:stream-page' %}" method="get">
+    <button type="submit">Back to stream</button>
+  </form>
   <title>{{ entry.title|default:"Entry" }}</title>
   <style>
     .comment-block { margin-bottom: 1em; padding: 0.5em; border: 1px solid #ddd; border-radius: 4px; }
     .comment-author { font-weight: bold; }
     .comment-date { font-size: 0.9em; color: #666; margin-bottom: 0.25em; }
     .comment-text { white-space: pre-wrap; word-wrap: break-word; max-width: 100%; overflow-wrap: break-word; }
+    .entry-markdown { max-width: 100%; }
   </style>
 </head>
 <body>
+  {% load markdown_extras %}
   <h1>{{ entry.title|default:"Entry" }}</h1>
   <p><strong>Author:</strong> <a href="{% url 'authors:profile' author.uuid %}">{{ author.display_name }}</a></p>
   <p><strong>Published:</strong> {{ entry.published }}</p>
@@ -22,12 +27,17 @@
   {% endif %}
 
   <h2>Content ({{ entry.content_type }})</h2>
-  <pre>{{ entry.content }}</pre>
+  {% if entry.content_type == "text/markdown" %}
+    <div class="entry-markdown">
+      {{ entry.content|render_markdown|safe }}
+    </div>
+  {% else %}
+    <pre>{{ entry.content }}</pre>
+  {% endif %}
 
   <p>
     <a href="{% url 'entries:entry-edit' author.uuid entry.uuid %}">Edit</a> |
-    <a href="{% url 'entries:entry-delete' author.uuid entry.uuid %}">Delete</a> |
-    <a href="{% url 'entries:author-entries' author.uuid %}">Back to entries list</a>
+    <a href="{% url 'entries:entry-delete' author.uuid entry.uuid %}">Delete</a>
   </p>
 
   <h3>Likes ({{ like_count }})</h3>
