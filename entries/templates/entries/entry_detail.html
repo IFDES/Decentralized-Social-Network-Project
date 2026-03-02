@@ -4,6 +4,12 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{{ entry.title|default:"Entry" }}</title>
+  <style>
+    .comment-block { margin-bottom: 1em; padding: 0.5em; border: 1px solid #ddd; border-radius: 4px; }
+    .comment-author { font-weight: bold; }
+    .comment-date { font-size: 0.9em; color: #666; margin-bottom: 0.25em; }
+    .comment-text { white-space: pre-wrap; word-wrap: break-word; max-width: 100%; overflow-wrap: break-word; }
+  </style>
 </head>
 <body>
   <h1>{{ entry.title|default:"Entry" }}</h1>
@@ -23,6 +29,69 @@
     <a href="{% url 'entries:entry-delete' author.uuid entry.uuid %}">Delete</a> |
     <a href="{% url 'entries:author-entries' author.uuid %}">Back to entries list</a>
   </p>
+
+  <h3>Likes ({{ like_count }})</h3>
+  {% if current_user_has_liked %}
+    <form action="{% url 'entries:entry-unlike' author.uuid entry.uuid %}" method="post" style="display:inline;">
+      {% csrf_token %}
+      {% if not current_author %}
+        <input type="hidden" name="author_id" value="{{ authors.0.uuid }}">
+      {% endif %}
+      <button type="submit">Unlike</button>
+    </form>
+  {% else %}
+    <form action="{% url 'entries:entry-like' author.uuid entry.uuid %}" method="post" style="display:inline;">
+      {% csrf_token %}
+      {% if not current_author and authors %}
+        <label for="like_author_id">Like as:</label>
+        <select name="author_id" id="like_author_id" required>
+          {% for a in authors %}
+            <option value="{{ a.uuid }}">{{ a.display_name }}</option>
+          {% endfor %}
+        </select>
+      {% endif %}
+      <button type="submit">Like</button>
+    </form>
+  {% endif %}
+
+  <h3>Comments</h3>
+  {% if comments %}
+    <ul style="list-style: none; padding-left: 0;">
+      {% for c in comments %}
+        <li class="comment-block">
+          <div class="comment-author">{{ c.author.display_name }}</div>
+          <div class="comment-date">{{ c.published }}</div>
+          <div class="comment-text">{{ c.comment }}</div>
+        </li>
+      {% endfor %}
+    </ul>
+  {% else %}
+    <p>No comments yet.</p>
+  {% endif %}
+
+  <h4>Add a comment</h4>
+  {% if not current_author and not authors %}
+    <p>No authors available to comment as. Create an author in the admin, or log in with an account linked to an author.</p>
+  {% else %}
+  <form action="{% url 'entries:entry-comment-create' author.uuid entry.uuid %}" method="post">
+    {% csrf_token %}
+    {% if not current_author and authors %}
+      <p>
+        <label for="comment_author_id">Comment as:</label>
+        <select name="author_id" id="comment_author_id" required>
+          {% for a in authors %}
+            <option value="{{ a.uuid }}">{{ a.display_name }}</option>
+          {% endfor %}
+        </select>
+      </p>
+    {% endif %}
+    <p>
+      <label for="comment_text">Comment:</label><br>
+      <textarea name="comment" id="comment_text" rows="3" required></textarea>
+    </p>
+    <button type="submit">Post comment</button>
+  </form>
+  {% endif %}
 </body>
 </html>
 

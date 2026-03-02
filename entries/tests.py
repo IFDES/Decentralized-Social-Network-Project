@@ -7,6 +7,7 @@ from django.urls import reverse
 
 from authors.models import Author
 from entries.models import Entry
+from interactions.models import Comment, EntryLike
 
 
 class EntryModelTests(TestCase):
@@ -67,6 +68,70 @@ class EntryApiTests(TestCase):
 
         entry.refresh_from_db()
         self.assertTrue(entry.is_deleted)
+
+
+class EntryJsonCommentsLikesTests(TestCase):
+    """Feature 5: entry JSON includes real comments and likes counts and first page."""
+
+    def setUp(self):
+        self.client = Client()
+        self.author = Author.objects.create(display_name="Entry Author")
+        self.other_author = Author.objects.create(display_name="Commenter")
+
+    def test_entry_detail_api_includes_comments_and_likes(self):
+        entry = Entry.objects.create(
+            author=self.author,
+            title="Post with interactions",
+            content="Body",
+        )
+        Comment.objects.create(
+            author=self.other_author,
+            entry=entry,
+            comment="First comment",
+        )
+        Comment.objects.create(
+            author=self.other_author,
+            entry=entry,
+            comment="Second comment",
+        )
+        EntryLike.objects.create(author=self.other_author, entry=entry)
+
+        url = reverse("entries:entry-detail-api", args=[self.author.uuid, entry.uuid])
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+
+        self.assertEqual(payload["comments"]["count"], 2)
+        self.assertEqual(payload["comments"]["page_number"], 1)
+        self.assertEqual(payload["comments"]["size"], 5)
+        self.assertEqual(len(payload["comments"]["src"]), 2)
+        self.assertEqual(payload["comments"]["src"][0]["comment"], "Second comment")
+        self.assertEqual(payload["comments"]["src"][1]["comment"], "First comment")
+
+        self.assertEqual(payload["likes"]["count"], 1)
+        self.assertEqual(payload["likes"]["page_number"], 1)
+        self.assertEqual(payload["likes"]["size"], 5)
+        self.assertEqual(len(payload["likes"]["src"]), 1)
+        self.assertEqual(payload["likes"]["src"][0]["type"], "like")
+
+    def test_stream_api_entries_include_comments_likes_summary(self):
+        entry = Entry.objects.create(
+            author=self.author,
+            title="Stream entry",
+            content="Content",
+        )
+        Comment.objects.create(author=self.other_author, entry=entry, comment="One")
+        EntryLike.objects.create(author=self.other_author, entry=entry)
+
+        response = self.client.get(reverse("entries:stream-api"))
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["count"], 1)
+        entry_json = payload["src"][0]
+        self.assertEqual(entry_json["comments"]["count"], 1)
+        self.assertEqual(entry_json["likes"]["count"], 1)
+        self.assertEqual(len(entry_json["comments"]["src"]), 1)
+        self.assertEqual(len(entry_json["likes"]["src"]), 1)
 
 
 class StreamApiTests(TestCase):

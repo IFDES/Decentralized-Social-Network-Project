@@ -1,7 +1,8 @@
 from django.urls import path
 
-from . import views
 from interactions import views as interactions_views
+
+from . import views
 
 app_name = "entries"
 
@@ -25,6 +26,21 @@ urlpatterns = [
         "authors/<uuid:author_id>/entries/<uuid:entry_id>/",
         views.entry_detail_page,
         name="entry-detail",
+    ),
+    path(
+        "authors/<uuid:author_id>/entries/<uuid:entry_id>/comment/",
+        views.entry_comment_create_page,
+        name="entry-comment-create",
+    ),
+    path(
+        "authors/<uuid:author_id>/entries/<uuid:entry_id>/like/",
+        views.entry_like_page,
+        name="entry-like",
+    ),
+    path(
+        "authors/<uuid:author_id>/entries/<uuid:entry_id>/unlike/",
+        views.entry_unlike_page,
+        name="entry-unlike",
     ),
     path(
         "authors/<uuid:author_id>/entries/<uuid:entry_id>/edit/",
@@ -68,6 +84,15 @@ urlpatterns = [
         "api/authors/<uuid:author_id>/entries/<uuid:entry_id>/comments/<path:comment_ref>",
         interactions_views.entry_comment_detail_api,
         name="entry-comment-detail-api",
+    ),
+    path(
+        "api/authors/<uuid:author_id>/entries/<uuid:entry_id>/likes",
+        interactions_views.entry_likes_api,
+        name="entry-likes-api",
+    ),
+    path(
+        "api/authors/<uuid:author_id>/entries/<uuid:entry_id>/likes/",
+        interactions_views.entry_likes_api,
     ),
 ]
 

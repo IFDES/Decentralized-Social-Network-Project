@@ -17,8 +17,13 @@ from django.views.decorators.http import require_http_methods  # type: ignore[im
 from authors.models import Author
 from entries.models import Entry
 
-from .models import Comment
-from .serializers import comment_to_json, comments_list_json
+from .models import Comment, EntryLike
+from .serializers import (
+    comment_to_json,
+    comments_list_json,
+    like_to_json,
+    likes_list_json,
+)
 
 
 def _parse_json_body(request: HttpRequest) -> dict:
@@ -118,6 +123,13 @@ def _resolve_comment_author(request: HttpRequest, payload: dict) -> Author | Non
     return None
 
 
+def _resolve_like_author(request: HttpRequest, payload: dict) -> Author | None:
+    """
+    Shares the same resolution strategy as comments.
+    """
+    return _resolve_comment_author(request, payload)
+
+
 @csrf_exempt
 def entry_comments_api(request: HttpRequest, author_id: UUID, entry_id: UUID) -> HttpResponse:
     if request.method not in ("GET", "POST"):
@@ -189,3 +201,45 @@ def entry_comment_detail_api(
             return JsonResponse({"detail": "Comment not found."}, status=404)
 
     return JsonResponse(comment_to_json(comment))
+
+
+@csrf_exempt
+def entry_likes_api(request: HttpRequest, author_id: UUID, entry_id: UUID) -> HttpResponse:
+    if request.method not in ("GET", "POST", "DELETE"):
+        return HttpResponseNotAllowed(["GET", "POST", "DELETE"])
+
+    entry_author = get_object_or_404(Author, pk=author_id, is_deleted=False)
+    entry = get_object_or_404(Entry, pk=entry_id, author=entry_author)
+    if not entry.is_visible:
+        return HttpResponseBadRequest("Entry has been deleted.")
+
+    if request.method == "GET":
+        queryset = (
+            EntryLike.objects.filter(entry=entry)
+            .select_related("author", "entry")
+            .order_by("-published")
+        )
+        page_number, size, count, page_items = _paginate_queryset(request, queryset)
+        return JsonResponse(likes_list_json(entry, page_number, size, count, page_items))
+
+    # For POST and DELETE we may have a JSON body; default to {} if empty.
+    try:
+        payload = _parse_json_body(request) if request.body else {}
+    except ValueError as exc:
+        return HttpResponseBadRequest(str(exc))
+
+    author = _resolve_like_author(request, payload)
+    if not author:
+        return HttpResponseBadRequest("Unable to resolve like author.")
+
+    if request.method == "POST":
+        like, created = EntryLike.objects.get_or_create(
+            author=author,
+            entry=entry,
+        )
+        status_code = 201 if created else 200
+        return JsonResponse(like_to_json(like), status=status_code)
+
+    # DELETE: unlike
+    EntryLike.objects.filter(author=author, entry=entry).delete()
+    return HttpResponse(status=204)

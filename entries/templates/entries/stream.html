@@ -20,6 +20,7 @@
           <p>{{ entry.content }}</p>
           <p><strong>Published:</strong> {{ entry.published }}</p>
           <p><strong>Updated:</strong> {{ entry.updated_at }}</p>
+          <p>{{ entry.like_count }} like{{ entry.like_count|pluralize }} · {{ entry.comment_count }} comment{{ entry.comment_count|pluralize }}</p>
           <p>
             <a href="{% url 'entries:entry-detail' entry.author.uuid entry.uuid %}">View entry</a>
           </p>
