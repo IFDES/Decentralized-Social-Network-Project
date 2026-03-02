@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from uuid import UUID
 
 from django.conf import settings
+from django.db.models import Count
 from django.http import (
     HttpRequest,
     HttpResponse,
@@ -15,13 +16,29 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 
-from authors.models import Author
+from authors.models import Author, AuthorAccount
+
+from interactions.models import Comment, EntryLike
+from interactions.serializers import comments_list_json, likes_list_json
 
 from .forms import EntryDeleteForm, EntryForm
 from .models import Entry
 
 # This file is assisted by CoPilot on 27 Feb 2026 02:10 with the prompt
 # "Help me create a views.py file for entries in Django"
+
+
+def _get_current_author(request: HttpRequest):
+    """Resolve the current viewer as an Author (session + AuthorAccount), or None."""
+    user = getattr(request, "user", None)
+    if not user or not getattr(user, "is_authenticated", False):
+        return None
+    try:
+        account = AuthorAccount.objects.select_related("author").get(user=user)
+        return account.author if not account.author.is_deleted else None
+    except AuthorAccount.DoesNotExist:
+        return None
+
 
 def _build_entry_id(author: Author, entry: Entry) -> str:
     if entry.fqid:
@@ -45,11 +62,23 @@ def _entry_to_json(entry: Entry) -> dict:
 
     base = settings.SERVICE_BASE_URL.rstrip("/")
 
-    comments_api = f"{base}/api/authors/{author.uuid}/entries/{entry.uuid}/comments"
-    likes_api = f"{base}/api/authors/{author.uuid}/entries/{entry.uuid}/likes"
+    comments_queryset = (
+        Comment.objects.filter(entry=entry)
+        .select_related("author", "entry")
+        .order_by("-published")
+    )
+    comments_count = comments_queryset.count()
+    comments_page = list(comments_queryset[:5])
+    comments_payload = comments_list_json(entry, 1, 5, comments_count, comments_page)
 
-    comments_web = web
-    likes_web = web
+    likes_queryset = (
+        EntryLike.objects.filter(entry=entry)
+        .select_related("author", "entry")
+        .order_by("-published")
+    )
+    likes_count = likes_queryset.count()
+    likes_page = list(likes_queryset[:5])
+    likes_payload = likes_list_json(entry, 1, 5, likes_count, likes_page)
 
     return {
         "type": "entry",
@@ -69,24 +98,8 @@ def _entry_to_json(entry: Entry) -> dict:
             "github": author.github,
             "profileImage": author.profile_image,
         },
-        "comments": {
-            "type": "comments",
-            "id": comments_api,
-            "web": comments_web,
-            "page_number": 1,
-            "size": 5,
-            "count": 0,
-            "src": [],
-        },
-        "likes": {
-            "type": "likes",
-            "id": likes_api,
-            "web": likes_web,
-            "page_number": 1,
-            "size": 5,
-            "count": 0,
-            "src": [],
-        },
+        "comments": comments_payload,
+        "likes": likes_payload,
         "published": entry.published.astimezone(timezone.utc).isoformat(),
         "updated_at": entry.updated_at.astimezone(timezone.utc).isoformat(),
         "visibility": entry.visibility,
@@ -96,6 +109,7 @@ def _entry_to_json(entry: Entry) -> dict:
 def _stream_entries_queryset():
     return (
         Entry.objects.filter(is_deleted=False, deleted_at__isnull=True)
+        .filter(visibility=Entry.VISIBILITY_PUBLIC)
         .exclude(visibility=Entry.VISIBILITY_DELETED)
         .select_related("author")
         .order_by("-updated_at", "-published", "-uuid")
@@ -109,7 +123,23 @@ def _stream_entries_queryset():
 
 @require_http_methods(["GET"])
 def stream_page(request: HttpRequest) -> HttpResponse:
-    entries = _stream_entries_queryset()
+    entries = list(_stream_entries_queryset())
+    entry_ids = [e.uuid for e in entries]
+    like_counts = dict(
+        EntryLike.objects.filter(entry_id__in=entry_ids)
+        .values("entry_id")
+        .annotate(n=Count("uuid"))
+        .values_list("entry_id", "n")
+    )
+    comment_counts = dict(
+        Comment.objects.filter(entry_id__in=entry_ids)
+        .values("entry_id")
+        .annotate(n=Count("uuid"))
+        .values_list("entry_id", "n")
+    )
+    for e in entries:
+        e.like_count = like_counts.get(e.uuid, 0)
+        e.comment_count = comment_counts.get(e.uuid, 0)
     return render(
         request,
         "entries/stream.html",
@@ -148,14 +178,102 @@ def entry_detail_page(
         author=author,
         is_deleted=False,
     )
+    comments = (
+        Comment.objects.filter(entry=entry)
+        .select_related("author")
+        .order_by("-published")[:20]
+    )
+    like_count = EntryLike.objects.filter(entry=entry).count()
+    current_author = _get_current_author(request)
+    current_user_has_liked = (
+        current_author is not None
+        and EntryLike.objects.filter(author=current_author, entry=entry).exists()
+    )
+    authors = list(Author.objects.filter(is_deleted=False).order_by("display_name"))
     return render(
         request,
         "entries/entry_detail.html",
         {
             "author": author,
             "entry": entry,
+            "comments": comments,
+            "like_count": like_count,
+            "current_author": current_author,
+            "current_user_has_liked": current_user_has_liked,
+            "authors": authors,
         },
     )
+
+
+@require_http_methods(["POST"])
+def entry_comment_create_page(
+    request: HttpRequest, author_id: UUID, entry_id: UUID
+) -> HttpResponse:
+    author = get_object_or_404(Author, pk=author_id, is_deleted=False)
+    entry = get_object_or_404(Entry, pk=entry_id, author=author, is_deleted=False)
+    comment_author = _get_current_author(request)
+    if not comment_author:
+        author_pk = request.POST.get("author_id")
+        if author_pk:
+            try:
+                comment_author = Author.objects.get(pk=UUID(author_pk), is_deleted=False)
+            except (ValueError, Author.DoesNotExist):
+                pass
+    if not comment_author:
+        return HttpResponseBadRequest("Unable to determine comment author.")
+    comment_text = (request.POST.get("comment") or "").strip()
+    if not comment_text:
+        return HttpResponseBadRequest("Comment text is required.")
+    content_type = request.POST.get("content_type") or Comment.CONTENT_TEXT_PLAIN
+    if content_type not in dict(Comment.CONTENT_TYPE_CHOICES):
+        content_type = Comment.CONTENT_TEXT_PLAIN
+    Comment.objects.create(
+        author=comment_author,
+        entry=entry,
+        comment=comment_text,
+        content_type=content_type,
+    )
+    return redirect("entries:entry-detail", author_id=author.uuid, entry_id=entry.uuid)
+
+
+@require_http_methods(["POST"])
+def entry_like_page(
+    request: HttpRequest, author_id: UUID, entry_id: UUID
+) -> HttpResponse:
+    author = get_object_or_404(Author, pk=author_id, is_deleted=False)
+    entry = get_object_or_404(Entry, pk=entry_id, author=author, is_deleted=False)
+    like_author = _get_current_author(request)
+    if not like_author:
+        author_pk = request.POST.get("author_id")
+        if author_pk:
+            try:
+                like_author = Author.objects.get(pk=UUID(author_pk), is_deleted=False)
+            except (ValueError, Author.DoesNotExist):
+                pass
+    if not like_author:
+        return HttpResponseBadRequest("Unable to determine like author.")
+    EntryLike.objects.get_or_create(author=like_author, entry=entry)
+    return redirect("entries:entry-detail", author_id=author.uuid, entry_id=entry.uuid)
+
+
+@require_http_methods(["POST"])
+def entry_unlike_page(
+    request: HttpRequest, author_id: UUID, entry_id: UUID
+) -> HttpResponse:
+    author = get_object_or_404(Author, pk=author_id, is_deleted=False)
+    entry = get_object_or_404(Entry, pk=entry_id, author=author, is_deleted=False)
+    like_author = _get_current_author(request)
+    if not like_author:
+        author_pk = request.POST.get("author_id")
+        if author_pk:
+            try:
+                like_author = Author.objects.get(pk=UUID(author_pk), is_deleted=False)
+            except (ValueError, Author.DoesNotExist):
+                pass
+    if not like_author:
+        return HttpResponseBadRequest("Unable to determine like author.")
+    EntryLike.objects.filter(author=like_author, entry=entry).delete()
+    return redirect("entries:entry-detail", author_id=author.uuid, entry_id=entry.uuid)
 
 
 @require_http_methods(["GET", "POST"])
