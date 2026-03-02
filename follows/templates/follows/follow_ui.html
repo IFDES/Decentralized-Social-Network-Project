@@ -20,6 +20,9 @@
   </style>
 </head>
 <body>
+  <form action="{% url 'entries:stream-page' %}" method="get">
+    <button type="submit">Back to stream</button>
+  </form>
   <h1>Follows</h1>
 
   {% if not current_author %}
