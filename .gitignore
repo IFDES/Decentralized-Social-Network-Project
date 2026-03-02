@@ -51,3 +51,5 @@ coverage/
 Thumbs.db
 .vscode/
 .idea/
+
+cookies*.txt

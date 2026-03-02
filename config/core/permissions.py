@@ -28,3 +28,11 @@ def user_owns_object_via_author(request: HttpRequest, obj) -> bool:
         return False
     return user_owns_author(request, author)
 
+# Checks if "authenticated as AUTHOR_SERIAL" 
+def user_matches_author_uuid(request: HttpRequest, author_uuid) -> bool:
+    if not user_is_authenticated(request):
+        return False
+    account = getattr(request.user, "author_account", None)
+    if not account or not getattr(account, "author", None):
+        return False
+    return account.author.uuid == author_uuid
