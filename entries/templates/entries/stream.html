@@ -3,6 +3,9 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <form action="{% url 'authors:my_profile' %}" method="get">
+    <button type="submit">View my profile</button>
+  </form>
   <title>Stream</title>
 
   <style>

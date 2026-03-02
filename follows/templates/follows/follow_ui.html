@@ -20,9 +20,20 @@
   </style>
 </head>
 <body>
-  <form action="{% url 'entries:stream-page' %}" method="get">
-    <button type="submit">Back to stream</button>
-  </form>
+  <style>
+    .button-row {
+      display: flex;
+      gap: 10px;
+    }
+  </style>
+  <div class="button-row">
+    <form action="{% url 'entries:stream-page' %}" method="get">
+      <button type="submit">Back to stream</button>
+    </form>
+    <form action="{% url 'authors:profile' current_author.uuid %}" method="get">
+      <button type="submit">Back to profile</button>
+    </form>
+  </div>
   <h1>Follows</h1>
 
   {% if not current_author %}
