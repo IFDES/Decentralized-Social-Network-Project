@@ -1,25 +1,100 @@
 import json
 from urllib.parse import unquote
-from django.http import (
-    HttpRequest,
-    JsonResponse,
-    HttpResponseBadRequest,
-    HttpResponseForbidden,
-    HttpResponse,
-)
-from django.shortcuts import get_object_or_404, render
-from django.views.decorators.csrf import csrf_exempt
-from django.views.decorators.http import require_http_methods
-from authors.models import Author
-from config.core.serializers import author_to_json
-from config.core.permissions import user_matches_author_uuid
-from .models import FollowRelationship
 
 from django.contrib.auth.decorators import login_required
+from django.http import (
+    HttpRequest,
+    HttpResponse,
+    HttpResponseBadRequest,
+    HttpResponseForbidden,
+    JsonResponse,
+)
+from django.shortcuts import get_object_or_404, redirect, render
+from django.views.decorators.csrf import csrf_exempt
+from django.views.decorators.http import require_http_methods
+
+from authors.models import Author, AuthorAccount
+from config.core.permissions import user_matches_author_uuid
+from config.core.serializers import author_to_json
+
+from .models import FollowRelationship
+
+
+def _get_current_author(request: HttpRequest):
+    user = getattr(request, "user", None)
+    if not user or not getattr(user, "is_authenticated", False):
+        return None
+    try:
+        acct = AuthorAccount.objects.select_related("author").get(user=user)
+    except AuthorAccount.DoesNotExist:
+        return None
+    author = acct.author
+    if not author or author.is_deleted:
+        return None
+    return author
+
 
 @login_required
-def follow_ui_page(request):
-    return render(request, "follows/follow_ui.html")
+def follow_ui_page(request: HttpRequest) -> HttpResponse:
+    """
+    Local follow UI:
+    - Uses logged-in user's AuthorAccount as 'me'
+    - Shows local authors you can follow
+    - Shows outgoing follows (pending/approved)
+    - Shows incoming follow requests (pending) with approve/deny
+    """
+    me = _get_current_author(request)
+    if not me:
+        return render(
+            request,
+            "follows/follow_ui.html",
+            {
+                "current_author": None,
+                "available_authors": [],
+                "following_pending": [],
+                "following_approved": [],
+                "incoming_requests": [],
+            },
+        )
+
+    local_authors = list(
+        Author.objects.filter(is_deleted=False, is_local=True)
+        .exclude(uuid=me.uuid)
+        .order_by("display_name")
+    )
+
+    outgoing_rels = list(
+        FollowRelationship.objects.filter(follower=me).select_related("followee")
+    )
+    rel_by_followee_id = {rel.followee_id: rel for rel in outgoing_rels}
+
+    for author in local_authors:
+        # Author uses uuid as primary key, so use pk (not .id)
+        rel = rel_by_followee_id.get(author.pk)
+        author.follow_status = rel.status if rel else None
+
+    following_pending = [
+        rel for rel in outgoing_rels if rel.status == FollowRelationship.Status.PENDING
+    ]
+    following_approved = [
+        rel for rel in outgoing_rels if rel.status == FollowRelationship.Status.APPROVED
+    ]
+
+    incoming_requests = FollowRelationship.objects.filter(
+        followee=me, status=FollowRelationship.Status.PENDING
+    ).select_related("follower")
+
+    return render(
+        request,
+        "follows/follow_ui.html",
+        {
+            "current_author": me,
+                "local_authors": local_authors,
+            "following_pending": following_pending,
+            "following_approved": following_approved,
+            "incoming_requests": incoming_requests,
+        },
+    )
 
 def _decode_fqid(encoded: str) -> str:
     # Many endpoints include the foreign author's ID in the URL path
@@ -47,6 +122,83 @@ def follow_to_json(rel: FollowRelationship) -> dict:
         "actor": author_to_json(rel.follower),
         "object": author_to_json(rel.followee),
     }
+
+
+@login_required
+@require_http_methods(["POST"])
+def follow_local_author_ui(request: HttpRequest, target_uuid) -> HttpResponse:
+    """
+    Local follow action:
+    - Uses the logged-in author's UUID
+    - Follows a local author by their UUID (no FQID typing in UI)
+    """
+    me = _get_current_author(request)
+    if not me:
+        return HttpResponseForbidden("You must be mapped to an author to follow.")
+
+    target = get_object_or_404(
+        Author, uuid=target_uuid, is_deleted=False, is_local=True
+    )
+    if target.uuid == me.uuid:
+        return HttpResponseBadRequest("You cannot follow yourself.")
+
+    rel, created = FollowRelationship.objects.get_or_create(
+        follower=me,
+        followee=target,
+        defaults={"status": FollowRelationship.Status.PENDING},
+    )
+    if not created and rel.status == FollowRelationship.Status.DENIED:
+        rel.status = FollowRelationship.Status.PENDING
+        rel.save(update_fields=["status", "updated_at"])
+
+    return redirect("follows:follow-ui")
+
+
+@login_required
+@require_http_methods(["POST"])
+def unfollow_local_author_ui(request: HttpRequest, target_uuid) -> HttpResponse:
+    """
+    Local unfollow action for UI: remove any outgoing follow relationship to target.
+    """
+    me = _get_current_author(request)
+    if not me:
+        return HttpResponseForbidden("You must be mapped to an author to unfollow.")
+
+    target = get_object_or_404(
+        Author, uuid=target_uuid, is_deleted=False, is_local=True
+    )
+    FollowRelationship.objects.filter(follower=me, followee=target).delete()
+    return redirect("follows:follow-ui")
+
+
+@login_required
+@require_http_methods(["POST"])
+def approve_request_ui(request: HttpRequest, rel_id: int) -> HttpResponse:
+    me = _get_current_author(request)
+    if not me:
+        return HttpResponseForbidden("You must be mapped to an author to approve.")
+
+    rel = get_object_or_404(
+        FollowRelationship, pk=rel_id, followee=me, status=FollowRelationship.Status.PENDING
+    )
+    rel.status = FollowRelationship.Status.APPROVED
+    rel.save(update_fields=["status", "updated_at"])
+    return redirect("follows:follow-ui")
+
+
+@login_required
+@require_http_methods(["POST"])
+def deny_request_ui(request: HttpRequest, rel_id: int) -> HttpResponse:
+    me = _get_current_author(request)
+    if not me:
+        return HttpResponseForbidden("You must be mapped to an author to deny.")
+
+    rel = get_object_or_404(
+        FollowRelationship, pk=rel_id, followee=me, status=FollowRelationship.Status.PENDING
+    )
+    rel.status = FollowRelationship.Status.DENIED
+    rel.save(update_fields=["status", "updated_at"])
+    return redirect("follows:follow-ui")
 
 @csrf_exempt
 @require_http_methods(["GET"])
