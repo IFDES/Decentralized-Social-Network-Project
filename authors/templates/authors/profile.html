@@ -22,7 +22,9 @@
       -
     {% endif %}
   </p>
+  {% if is_owner %}
   <p><a href="{% url 'authors:edit_profile' author.uuid %}">Edit profile</a></p>
+  {% endif %}
 
   <h2>Entries</h2>
   {% if is_owner %}
