@@ -3,6 +3,9 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <form action="{% url 'entries:stream-page' %}" method="get">
+    <button type="submit">Back to stream</button>
+  </form>
   <title>{{ author.display_name }}</title>
 </head>
 <body>
@@ -21,10 +24,19 @@
   </p>
   <p><a href="{% url 'authors:edit_profile' author.uuid %}">Edit profile</a></p>
 
-  <h2>Public Entries</h2>
-  {% if public_entries %}
+  <h2>Entries</h2>
+  {% if is_owner %}
+    <p>You are viewing all of your entries (public, friends-only, and unlisted).</p>
+    <p><a href="{% url 'entries:entry-create' author.uuid %}">Create new entry</a></p>
+  {% elif is_friend %}
+    <p>You are friends with this author. You can see their public and friends-only entries.</p>
+  {% else %}
+    <p>You are viewing this author's public entries.</p>
+  {% endif %}
+
+  {% if entries %}
     <ul>
-      {% for entry in public_entries %}
+      {% for entry in entries %}
         <li>
           {% if entry.web %}
             <a href="{{ entry.web }}">
@@ -37,11 +49,7 @@
       {% endfor %}
     </ul>
   {% else %}
-    <p>No public entries yet.</p>
+    <p>No entries are visible.</p>
   {% endif %}
-
-  <p>
-    <a href="{% url 'entries:author-entries' author.uuid %}">View all entries</a>
-  </p>
 </body>
 </html>
