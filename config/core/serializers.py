@@ -56,12 +56,11 @@ def author_to_json(author) -> dict:
         "id": fqid,
         "host": host,
         "web": web,
-        "displayName": author.display_name,
-        "github": author.github,
-        "profileImage": author.profile_image,
-        "description": author.description,
+        "displayName": author.display_name or "",
+        "github": author.github or "",
+        "profileImage": author.profile_image or "",
+        "description": author.description or "",
     }
-
 
 # Add other serializers here later.
 

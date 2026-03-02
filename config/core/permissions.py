@@ -28,11 +28,23 @@ def user_owns_object_via_author(request: HttpRequest, obj) -> bool:
         return False
     return user_owns_author(request, author)
 
-# Checks if "authenticated as AUTHOR_SERIAL" 
 def user_matches_author_uuid(request: HttpRequest, author_uuid) -> bool:
+    # Ownership check for endpoints that take an author UUID in the URL
+    # We must ensure the caller is not only logged in, but also acting as that same author
+    # Called by views before allowing "author-only" actions (follow/unfollow, approve followers, etc.)
+
+    # Not logged in (no valid session), so they cannot perform author-restricted actions.
     if not user_is_authenticated(request):
         return False
-    account = getattr(request.user, "author_account", None)
-    if not account or not getattr(account, "author", None):
+
+    # request.user is a Django User
+    # author_account is the 1 - 1 relationship created by our AuthorAccount model
+    # If it does not exist, the user is not associated with any Author on this node
+    acct = getattr(request.user, "author_account", None)
+
+    # If the mapping row does not exist or missing author then deny
+    if not acct or not getattr(acct, "author", None):
         return False
-    return account.author.uuid == author_uuid
+
+    # Allow if the user's Author UUID matches the UUID in the URL
+    return acct.author.uuid == author_uuid
