@@ -251,27 +251,27 @@ def following_detail(request: HttpRequest, author_serial, foreign_author_fqid):
     # Methods:
     # - GET: Check if <me> is following <target> (PENDING or APPROVED). 404 if not.
     # - PUT: Create a follow request (PENDING) if none exists, or re-request after DENIED.
-    # - DELETE: Unfollow (delete the relationship row).
+    # - DELETE: Unfollow (delete the relationship row)
     
-    # This endpoint is author-owned: only <me> can manage their following.
+    # This endpoint is author-owned: only <me> can manage their following
     me = get_object_or_404(Author, uuid=author_serial, is_deleted=False)
     forbidden = _require_owner_or_403(request, me.uuid)
     if forbidden:
         return forbidden
 
-    # Decode the foreign author's FQID and find the Author row by fqid.
+    # Decode the foreign author's FQID and find the Author row by fqid
     followee_fqid = _decode_fqid(foreign_author_fqid)
     followee = get_object_or_404(Author, fqid=followee_fqid, is_deleted=False)
 
     if request.method == "GET":
-        # "Following" includes pending requests and accepted follows.
+        # "Following" includes pending requests and accepted follows
         rel = FollowRelationship.objects.filter(
             follower=me,
             followee=followee,
             status__in=[FollowRelationship.Status.PENDING, FollowRelationship.Status.APPROVED],
         ).first()
 
-        # Respond 404 when the relationship does not exist.
+        # Respond 404 when the relationship does not exist
         if not rel:
             return JsonResponse({"detail": "Not following."}, status=404)
 
@@ -287,8 +287,8 @@ def following_detail(request: HttpRequest, author_serial, foreign_author_fqid):
         if not getattr(followee, "is_local", True):
             return HttpResponseBadRequest("Remote follows not enabled yet.")
 
-        # get_or_create ensures repeated "follow" clicks do not create duplicates.
-        # The DB constraint unique_follow_pair is a second layer of protection.
+        # get_or_create ensures repeated "follow" clicks do not create duplicates
+        # The DB constraint unique_follow_pair is a second layer of protection
         rel, created = FollowRelationship.objects.get_or_create(
             follower=me,
             followee=followee,
@@ -303,8 +303,6 @@ def following_detail(request: HttpRequest, author_serial, foreign_author_fqid):
         # Return the spec-style follow object so the client sees state=requesting.
         return JsonResponse(follow_to_json(rel), status=201 if created else 200)
 
-    # COME BACK
-
     # DELETE = Unfollow, we delete the row
     # If a follow did not exist, return 404 to match the "relationship missing" behavior.
     deleted, _ = FollowRelationship.objects.filter(follower=me, followee=followee).delete()
@@ -317,11 +315,10 @@ def following_detail(request: HttpRequest, author_serial, foreign_author_fqid):
 def followers_list(request: HttpRequest, author_serial):
     # GET /api/authors/<me>/followers
     #
-    # Returns who is currently an approved follower of <me>.
-    # Only APPROVED is considered a follower; PENDING are just requests.
+    # Returns who is currently an approved follower of <me>
+    # Only APPROVED is considered a follower; PENDING are just requests
     #
-    # This endpoint is author-owned in your implementation (only <me> can view).
-    # Some specs allow it to be public; keep consistent with your permission policy.
+    # This endpoint is author-owned in your implementation (only <me> can view)
     me = get_object_or_404(Author, uuid=author_serial, is_deleted=False)
     forbidden = _require_owner_or_403(request, me.uuid)
     if forbidden:
@@ -348,15 +345,15 @@ def followers_list(request: HttpRequest, author_serial):
 @require_http_methods(["GET", "PUT", "DELETE"])
 def followers_detail(request: HttpRequest, author_serial, foreign_author_fqid):
     # /api/authors/<me>/followers/<foreign_author_id>
-    #
+
     # Methods:
-    # - GET: Is <foreign> an APPROVED follower of <me>? If yes return author; else 404.
-    # - PUT: Accept a pending follow request from <foreign> -> <me>.
+    # - GET: Is <foreign> an APPROVED follower of <me>? If yes return author; else 404
+    # - PUT: Accept a pending follow request from <foreign> -> <me>
     # - DELETE:
-    #     - If request is pending: reject it (set DENIED).
-    #     - If follower is approved: optionally remove them (policy choice).
-    #
-    # This endpoint is author-owned: only <me> can approve/deny followers of <me>.
+    #     - If request is pending: reject it (set DENIED)
+    #     - If follower is approved: optionally remove them (policy choice)
+
+    # This endpoint is author-owned: only <me> can approve/deny followers of <me>
     me = get_object_or_404(Author, uuid=author_serial, is_deleted=False)
     forbidden = _require_owner_or_403(request, me.uuid)
     if forbidden:
@@ -366,7 +363,7 @@ def followers_detail(request: HttpRequest, author_serial, foreign_author_fqid):
     follower = get_object_or_404(Author, fqid=follower_fqid, is_deleted=False)
 
     if request.method == "GET":
-        # Only accepted relationships count as followers.
+        # Only accepted relationships count as followers
         rel = FollowRelationship.objects.filter(
             follower=follower,
             followee=me,
@@ -401,7 +398,6 @@ def followers_detail(request: HttpRequest, author_serial, foreign_author_fqid):
         return JsonResponse(follow_to_json(rel), status=200)
 
     if rel.status == FollowRelationship.Status.APPROVED:
-        # Optional policy: allow an author to remove a follower after approval.
         rel.delete()
         return HttpResponse(status=204)
 

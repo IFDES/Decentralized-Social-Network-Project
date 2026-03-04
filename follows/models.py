@@ -63,7 +63,7 @@ class FollowRelationship(models.Model):
     # Updated upon every save
     updated_at = models.DateTimeField(auto_now=True)
 
-    @staticmethod
+    @staticmethod # Because it's a general helper that does not need one specfic FollowRelationship instance, therefore we don't need self
     def friends_of(author):
         """
         Returns a queryset of Author objects that are friends with `author`
