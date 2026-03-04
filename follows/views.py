@@ -1,6 +1,5 @@
 import json
 from urllib.parse import unquote
-
 from django.contrib.auth.decorators import login_required
 from django.http import (
     HttpRequest,
@@ -12,18 +11,17 @@ from django.http import (
 from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
-
 from authors.models import Author, AuthorAccount
 from config.core.permissions import user_matches_author_uuid
 from config.core.serializers import author_to_json
-
 from .models import FollowRelationship
 
-
+# _function means internal helper not public endpoint
 def _get_current_author(request: HttpRequest):
     user = getattr(request, "user", None)
     if not user or not getattr(user, "is_authenticated", False):
         return None
+    # Fetch the related Author to avoid an extra DB hit
     try:
         acct = AuthorAccount.objects.select_related("author").get(user=user)
     except AuthorAccount.DoesNotExist:
@@ -32,7 +30,6 @@ def _get_current_author(request: HttpRequest):
     if not author or author.is_deleted:
         return None
     return author
-
 
 @login_required
 def follow_ui_page(request: HttpRequest) -> HttpResponse:
@@ -54,6 +51,7 @@ def follow_ui_page(request: HttpRequest) -> HttpResponse:
                 "following_pending": [],
                 "following_approved": [],
                 "incoming_requests": [],
+                "friends": [],
             },
         )
 
@@ -66,38 +64,46 @@ def follow_ui_page(request: HttpRequest) -> HttpResponse:
     outgoing_rels = list(
         FollowRelationship.objects.filter(follower=me).select_related("followee")
     )
-    rel_by_followee_id = {rel.followee_id: rel for rel in outgoing_rels}
 
+    rel_by_followee_id = {}
+    for rel in outgoing_rels:
+        rel_by_followee_id[rel.followee_id] = rel
+        
     for author in local_authors:
         # Author uses uuid as primary key, so use pk (not .id)
         rel = rel_by_followee_id.get(author.pk)
         author.follow_status = rel.status if rel else None
 
-    following_pending = [
-        rel for rel in outgoing_rels if rel.status == FollowRelationship.Status.PENDING
-    ]
-    following_approved = [
-        rel for rel in outgoing_rels if rel.status == FollowRelationship.Status.APPROVED
-    ]
+    following_pending = []
+    for rel in outgoing_rels:
+        if rel.status == FollowRelationship.Status.PENDING:
+            following_pending.append(rel)
+
+    following_approved = []
+    for rel in outgoing_rels:
+        if rel.status == FollowRelationship.Status.APPROVED:
+            following_approved.append(rel)
 
     incoming_requests = FollowRelationship.objects.filter(
         followee=me, status=FollowRelationship.Status.PENDING
     ).select_related("follower")
+
+    friends = list(FollowRelationship.friends_of(me).order_by("display_name"))
 
     return render(
         request,
         "follows/follow_ui.html",
         {
             "current_author": me,
-                "local_authors": local_authors,
+            "local_authors": local_authors,
             "following_pending": following_pending,
             "following_approved": following_approved,
             "incoming_requests": incoming_requests,
+            "friends": friends,
         },
     )
 
 def _decode_fqid(encoded: str) -> str:
-    # Many endpoints include the foreign author's ID in the URL path
     # The project spec represents author IDs as full URLs (FQIDs), which contain "/" and ":"
 
     # Since "/" cannot appear raw inside most path segments, clients percent-encode the FQID, we decode it back to the original URL so we can look up Author.fqid
@@ -110,19 +116,18 @@ def _require_owner_or_403(request: HttpRequest, author_uuid):
         return HttpResponseForbidden("Not authorized for this author.")
     return None
 
-# Serialize a FollowRelationship as the spec-style "follow request object".
+# Serialize a FollowRelationship following the example object requirements
 def follow_to_json(rel: FollowRelationship) -> dict:
     # We store internal statuses as PENDING/APPROVED/DENIED in the database
     # The spec wants external state values as requesting/accepted/rejected
-    # The model exposes rel.state to map status -> state.
+    # The model exposes rel.state to map status -> state
     return {
         "type": "follow",
         "summary": f"{rel.follower.display_name} wants to follow {rel.followee.display_name}",
-        "state": rel.state,
+        "state": rel.state, # Call state(rel) or rel.state() like an attribute in models.py due to @property
         "actor": author_to_json(rel.follower),
         "object": author_to_json(rel.followee),
     }
-
 
 @login_required
 @require_http_methods(["POST"])
@@ -142,17 +147,21 @@ def follow_local_author_ui(request: HttpRequest, target_uuid) -> HttpResponse:
     if target.uuid == me.uuid:
         return HttpResponseBadRequest("You cannot follow yourself.")
 
+    # If a row already exists for (me -> target), fetch it and store in rel
+    # If not, create it with default status PENDING in rel
+    # created is True if it had to create
     rel, created = FollowRelationship.objects.get_or_create(
         follower=me,
         followee=target,
         defaults={"status": FollowRelationship.Status.PENDING},
     )
+
+    # If they were previously rejected, allow re-request
     if not created and rel.status == FollowRelationship.Status.DENIED:
         rel.status = FollowRelationship.Status.PENDING
         rel.save(update_fields=["status", "updated_at"])
 
     return redirect("follows:follow-ui")
-
 
 @login_required
 @require_http_methods(["POST"])
@@ -197,7 +206,7 @@ def deny_request_ui(request: HttpRequest, rel_id: int) -> HttpResponse:
         FollowRelationship, pk=rel_id, followee=me, status=FollowRelationship.Status.PENDING
     )
     rel.status = FollowRelationship.Status.DENIED
-    rel.save(update_fields=["status", "updated_at"])
+    rel.save(update_fields=["status", "updated_at"]) # Only updates status and updated_at so more efficient
     return redirect("follows:follow-ui")
 
 @csrf_exempt
@@ -216,13 +225,18 @@ def following_list(request: HttpRequest, author_serial):
     # select_related("followee") avoids an N+1 query when serializing followees.
     rels = FollowRelationship.objects.filter(
         follower=me,
+        # status field, lookup type = in like in SQL WHERE status IN ('PENDING', 'APPROVED')
         status__in=[FollowRelationship.Status.PENDING, FollowRelationship.Status.APPROVED],
     ).select_related("followee")
+
+    following_list = []
+    for rel in rels:
+        following_list.append(author_to_json(rel.followee))
 
     return JsonResponse(
         {
             "type": "following",
-            "following": [author_to_json(r.followee) for r in rels],
+            "following": following_list,
         }
     )
 
@@ -231,14 +245,14 @@ def following_list(request: HttpRequest, author_serial):
 @require_http_methods(["GET", "PUT", "DELETE"])
 def following_detail(request: HttpRequest, author_serial, foreign_author_fqid):
     # /api/authors/<me>/following/<foreign_author_id>
-    #
+
     # foreign_author_id is a percent-encoded FQID (full URL) placed in the path.
-    #
+    
     # Methods:
     # - GET: Check if <me> is following <target> (PENDING or APPROVED). 404 if not.
     # - PUT: Create a follow request (PENDING) if none exists, or re-request after DENIED.
     # - DELETE: Unfollow (delete the relationship row).
-    #
+    
     # This endpoint is author-owned: only <me> can manage their following.
     me = get_object_or_404(Author, uuid=author_serial, is_deleted=False)
     forbidden = _require_owner_or_403(request, me.uuid)
@@ -257,18 +271,17 @@ def following_detail(request: HttpRequest, author_serial, foreign_author_fqid):
             status__in=[FollowRelationship.Status.PENDING, FollowRelationship.Status.APPROVED],
         ).first()
 
-        # Spec-style behavior: respond 404 when the relationship does not exist.
+        # Respond 404 when the relationship does not exist.
         if not rel:
             return JsonResponse({"detail": "Not following."}, status=404)
 
-        # Keeping existing API behavior: GET returns the target author object.
-        # (Some specs instead return a follow object; keep consistent with your earlier design.)
+        # GET returns the target author object.
         return JsonResponse(author_to_json(followee))
 
     if request.method == "PUT":
         # Guardrails:
-        # - Disallow following yourself.
-        # - Disallow remote follows for now (later parts usually enqueue to inbox).
+        # - No following yourself.
+        # - No remote follows for now (later to inbox)
         if me.uuid == followee.uuid:
             return HttpResponseBadRequest("You cannot follow yourself.")
         if not getattr(followee, "is_local", True):
@@ -282,9 +295,7 @@ def following_detail(request: HttpRequest, author_serial, foreign_author_fqid):
             defaults={"status": FollowRelationship.Status.PENDING},
         )
 
-        # Policy choice:
         # If the user was previously rejected, allow them to request again by returning to PENDING.
-        # Alternative policy would be "once denied, always denied" to prevent spam.
         if not created and rel.status == FollowRelationship.Status.DENIED:
             rel.status = FollowRelationship.Status.PENDING
             rel.save(update_fields=["status", "updated_at"])
@@ -292,13 +303,14 @@ def following_detail(request: HttpRequest, author_serial, foreign_author_fqid):
         # Return the spec-style follow object so the client sees state=requesting.
         return JsonResponse(follow_to_json(rel), status=201 if created else 200)
 
-    # DELETE: Unfollow. We delete the row so streams stop including the followee.
+    # COME BACK
+
+    # DELETE = Unfollow, we delete the row
     # If a follow did not exist, return 404 to match the "relationship missing" behavior.
     deleted, _ = FollowRelationship.objects.filter(follower=me, followee=followee).delete()
     if deleted == 0:
         return JsonResponse({"detail": "Not following."}, status=404)
     return HttpResponse(status=204)
-
 
 @csrf_exempt
 @require_http_methods(["GET"])
@@ -320,10 +332,14 @@ def followers_list(request: HttpRequest, author_serial):
         status=FollowRelationship.Status.APPROVED,
     ).select_related("follower")
 
+    followers_list = []
+    for rel in rels:
+        followers_list.append(author_to_json(rel.follower))
+
     return JsonResponse(
         {
             "type": "followers",
-            "followers": [author_to_json(r.follower) for r in rels],
+            "followers": followers_list,
         }
     )
 
@@ -397,10 +413,10 @@ def followers_detail(request: HttpRequest, author_serial, foreign_author_fqid):
 @require_http_methods(["GET"])
 def follow_requests_list(request: HttpRequest, author_serial):
     # GET /api/authors/<me>/follow_requests
-    #
+
     # Returns incoming follow requests that <me> needs to approve or reject.
     # Only PENDING requests are included.
-    #
+
     # This endpoint is author-owned: only <me> can view their own requests.
     me = get_object_or_404(Author, uuid=author_serial, is_deleted=False)
     forbidden = _require_owner_or_403(request, me.uuid)
@@ -415,3 +431,38 @@ def follow_requests_list(request: HttpRequest, author_serial):
     # Each item is a spec-style follow object with state="requesting".
     items = [follow_to_json(r) for r in rels]
     return JsonResponse({"type": "follow_requests", "items": items})
+
+# Returns the list of friends (mutual approved)
+@csrf_exempt
+@require_http_methods(["GET"])
+def friends_list(request, author_serial):
+    me = get_object_or_404(Author, uuid=author_serial, is_deleted=False)
+    forbidden = _require_owner_or_403(request, me.uuid)
+    if forbidden:
+        return forbidden
+
+    friends_qs = FollowRelationship.friends_of(me)
+
+    return JsonResponse(
+        {
+            "type": "friends",
+            "friends": [author_to_json(a) for a in friends_qs],
+        }
+    )
+
+# Check if a given author is a friend
+@csrf_exempt
+@require_http_methods(["GET"])
+def friends_detail(request, author_serial, foreign_author_fqid):
+    me = get_object_or_404(Author, uuid=author_serial, is_deleted=False)
+    forbidden = _require_owner_or_403(request, me.uuid)
+    if forbidden:
+        return forbidden
+
+    friend_fqid = _decode_fqid(foreign_author_fqid)
+    other = get_object_or_404(Author, fqid=friend_fqid, is_deleted=False)
+
+    if not FollowRelationship.are_friends(me, other):
+        return JsonResponse({"detail": "Not friends."}, status=404)
+
+    return JsonResponse(author_to_json(other))

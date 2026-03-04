@@ -30,9 +30,12 @@
     <form action="{% url 'entries:stream-page' %}" method="get">
       <button type="submit">Back to stream</button>
     </form>
-    <form action="{% url 'authors:profile' current_author.uuid %}" method="get">
-      <button type="submit">Back to profile</button>
-    </form>
+
+    {% if current_author %}
+      <form action="{% url 'authors:profile' current_author.uuid %}" method="get">
+        <button type="submit">Back to profile</button>
+      </form>
+    {% endif %}
   </div>
   <h1>Follows</h1>
 
@@ -133,6 +136,23 @@
           <p class="note">No pending follow requests.</p>
         {% endif %}
       </div>
+
+      <div class="column">
+        <h2>Friends</h2>
+        {% if friends %}
+          <ul>
+            {% for a in friends %}
+              <li>
+                {{ a.display_name }}
+                <span class="pill pill-approved">friend</span>
+              </li>
+            {% endfor %}
+          </ul>
+        {% else %}
+          <p class="note">No friends yet. Become friends by both following each other and approving.</p>
+        {% endif %}
+      </div>
+
     </div>
   {% endif %}
 </body>

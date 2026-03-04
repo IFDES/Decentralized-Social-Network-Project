@@ -20,6 +20,13 @@ urlpatterns = [
         "api/authors/<uuid:author_serial>/follow_requests",
         views.follow_requests_list,
     ),
+    path(
+        "api/authors/<uuid:author_serial>/friends", views.friends_list, name="friends-list"
+    ),
+    path(
+        "api/authors/<uuid:author_serial>/friends/<path:foreign_author_fqid>", views.friends_detail, name="friends-detail"
+    ),
+
     # Local UI endpoints
     path("follows/ui", views.follow_ui_page, name="follow-ui"),
     path("follows/", views.follow_ui_page),
