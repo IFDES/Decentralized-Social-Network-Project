@@ -365,7 +365,7 @@ def entry_delete_page(
             entry.visibility = Entry.VISIBILITY_DELETED
             entry.deleted_at = datetime.now(timezone.utc)
             entry.save()
-            return redirect("entries:author-entries", author_id=author.uuid)
+            return redirect("authors:profile", author_id=author.uuid)
     else:
         form = EntryDeleteForm()
 
