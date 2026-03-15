@@ -5,6 +5,25 @@ from django.db import models
 
 from authors.models import Author
 
+
+class HostedImage(models.Model):
+    """
+    Images hosted on this node so users can use them in CommonMark entries.
+    Served at /api/media/images/<uuid>/ (works in production). Node admins can
+    manage uploads in Django admin.
+    """
+    uuid = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    file = models.ImageField(upload_to="entries/images/%Y/%m/")
+    uploaded_by = models.ForeignKey(
+        Author,
+        related_name="hosted_images",
+        on_delete=models.CASCADE,
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
 # This piece of code is assisted by CoPilot on 27 Feb 2026 02:05 with the prompt
 # "Help me polish this section of code and fill in missing parts on entries in a social media platform in Django"
 class Entry(models.Model):
@@ -26,10 +45,12 @@ class Entry(models.Model):
 
     CONTENT_TEXT_PLAIN = "text/plain"
     CONTENT_TEXT_MARKDOWN = "text/markdown"
+    CONTENT_IMAGE = "image"
 
     CONTENT_TYPE_CHOICES = [
         (CONTENT_TEXT_PLAIN, "Plain text"),
         (CONTENT_TEXT_MARKDOWN, "CommonMark"),
+        (CONTENT_IMAGE, "Image"),
     ]
 
     uuid = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -53,7 +74,6 @@ class Entry(models.Model):
     )
 
     title = models.CharField(max_length=255, blank=True)
-    description = models.TextField(blank=True)
 
     content_type = models.CharField(
         max_length=64,
@@ -61,6 +81,12 @@ class Entry(models.Model):
         default=CONTENT_TEXT_PLAIN,
     )
     content = models.TextField()
+
+    image_urls = models.JSONField(
+        default=list,
+        blank=True,
+        help_text="List of image URLs to display below the main content.",
+    )
 
     visibility = models.CharField(
         max_length=16,

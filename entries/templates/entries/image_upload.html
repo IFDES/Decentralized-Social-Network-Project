@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Upload image - {{ author.display_name }}</title>
+</head>
+<body>
+  <h1>Upload image</h1>
+  <p>Host an image on this node to use in CommonMark entries or as an image entry. Use the URL in markdown: <code>![alt](url)</code></p>
+
+  {% if error %}
+    <p style="color: red;">{{ error }}</p>
+  {% endif %}
+
+  {% if uploaded_url %}
+    <p><strong>Image URL (copy this):</strong></p>
+    <p><input type="text" value="{{ uploaded_url }}" readonly style="width: 100%; max-width: 40em;" id="imgurl" /></p>
+    <button type="button" onclick="navigator.clipboard.writeText(document.getElementById('imgurl').value)">Copy URL</button>
+    <p><a href="{% url 'entries:image-upload' author.uuid %}">Upload another</a></p>
+  {% else %}
+    <form method="post" enctype="multipart/form-data">
+      {% csrf_token %}
+      <p>
+        <label for="file">Image file (PNG, JPEG, GIF, WebP):</label>
+        <input type="file" name="file" id="file" accept="image/png,image/jpeg,image/gif,image/webp" required />
+      </p>
+      <button type="submit">Upload</button>
+    </form>
+  {% endif %}
+
+  <p>
+    <a href="{% url 'entries:entry-create' author.uuid %}">New entry</a> |
+    <a href="{% url 'authors:profile' author.uuid %}">Back to profile</a>
+  </p>
+</body>
+</html>

@@ -8,8 +8,10 @@ from django.urls import reverse
 
 from authors.models import Author, AuthorAccount
 from entries.models import Entry
+from follows.models import FollowRelationship
 from interactions.models import Comment, EntryLike
 
+# Assisted by CoPilot on 14 March 2026 21:55 with prompt: "Help me write tests for the entry model and API"
 
 class EntryModelTests(TestCase):
     def setUp(self):
@@ -49,7 +51,6 @@ class EntryApiTests(TestCase):
             url,
             data={
                 "title": "API entry",
-                "description": "Desc",
                 "content": "Hello from API",
                 "contentType": "text/plain",
                 "visibility": "PUBLIC",
@@ -281,7 +282,6 @@ class StreamApiTests(TestCase):
             data=json.dumps(
                 {
                     "title": "Editable",
-                    "description": "",
                     "content": "Edited content",
                     "contentType": "text/plain",
                     "visibility": "PUBLIC",
@@ -533,3 +533,108 @@ class StreamPageTests(TestCase):
 
         self.assertEqual(len(expected_titles), 2)
         self.assertLess(content.find(expected_titles[0]), content.find(expected_titles[1]))
+
+
+class EntryVisibilityTests(TestCase):
+    """Unlisted (anyone with link) vs friends-only (only friends/owner)."""
+
+    def setUp(self):
+        self.client = Client()
+        self.author = Author.objects.create(display_name="Post Author")
+        self.other = Author.objects.create(display_name="Other Author")
+        self.owner_user = User.objects.create_user(username="vis_owner", password="passA12345")
+        self.other_user = User.objects.create_user(username="vis_other", password="passB12345")
+        AuthorAccount.objects.create(user=self.owner_user, author=self.author)
+        AuthorAccount.objects.create(user=self.other_user, author=self.other)
+
+    def test_unlisted_entry_viewable_by_anyone_with_link(self):
+        entry = Entry.objects.create(
+            author=self.author,
+            title="Unlisted",
+            content="Secret link",
+            visibility=Entry.VISIBILITY_UNLISTED,
+        )
+        url = reverse("entries:entry-detail-api", args=[self.author.uuid, entry.uuid])
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200, "Unlisted should be viewable by anyone with link")
+        self.assertEqual(response.json()["content"], "Secret link")
+
+    def test_friends_only_entry_forbidden_for_stranger(self):
+        entry = Entry.objects.create(
+            author=self.author,
+            title="Friends only",
+            content="Private",
+            visibility=Entry.VISIBILITY_FRIENDS,
+        )
+        url = reverse("entries:entry-detail-api", args=[self.author.uuid, entry.uuid])
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 403, "Friends-only should be forbidden for non-friend")
+
+    def test_friends_only_entry_viewable_by_owner(self):
+        entry = Entry.objects.create(
+            author=self.author,
+            title="Friends only",
+            content="Private",
+            visibility=Entry.VISIBILITY_FRIENDS,
+        )
+        url = reverse("entries:entry-detail-api", args=[self.author.uuid, entry.uuid])
+        self.client.login(username="vis_owner", password="passA12345")
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["content"], "Private")
+
+    def test_friends_only_entry_viewable_by_friend(self):
+        entry = Entry.objects.create(
+            author=self.author,
+            title="Friends only",
+            content="For friends",
+            visibility=Entry.VISIBILITY_FRIENDS,
+        )
+        FollowRelationship.objects.create(
+            follower=self.author, followee=self.other, status=FollowRelationship.Status.APPROVED
+        )
+        FollowRelationship.objects.create(
+            follower=self.other, followee=self.author, status=FollowRelationship.Status.APPROVED
+        )
+        url = reverse("entries:entry-detail-api", args=[self.author.uuid, entry.uuid])
+        self.client.login(username="vis_other", password="passB12345")
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["content"], "For friends")
+
+    def test_stream_includes_unlisted_from_followed_author_when_logged_in(self):
+        FollowRelationship.objects.create(
+            follower=self.other,
+            followee=self.author,
+            status=FollowRelationship.Status.APPROVED,
+        )
+        unlisted = Entry.objects.create(
+            author=self.author,
+            title="Unlisted from followed",
+            content="In stream for follower",
+            visibility=Entry.VISIBILITY_UNLISTED,
+        )
+        self.client.login(username="vis_other", password="passB12345")
+        response = self.client.get(reverse("entries:stream-api"))
+        self.assertEqual(response.status_code, 200)
+        ids = [item["id"] for item in response.json()["src"]]
+        self.assertIn(str(unlisted.fqid), ids)
+
+    def test_stream_includes_friends_only_from_friend_when_logged_in(self):
+        FollowRelationship.objects.create(
+            follower=self.author, followee=self.other, status=FollowRelationship.Status.APPROVED
+        )
+        FollowRelationship.objects.create(
+            follower=self.other, followee=self.author, status=FollowRelationship.Status.APPROVED
+        )
+        friends_entry = Entry.objects.create(
+            author=self.author,
+            title="Friends only",
+            content="In stream for friend",
+            visibility=Entry.VISIBILITY_FRIENDS,
+        )
+        self.client.login(username="vis_other", password="passB12345")
+        response = self.client.get(reverse("entries:stream-api"))
+        self.assertEqual(response.status_code, 200)
+        ids = [item["id"] for item in response.json()["src"]]
+        self.assertIn(str(friends_entry.fqid), ids)

@@ -23,6 +23,11 @@ urlpatterns = [
         name="entry-create",
     ),
     path(
+        "authors/<uuid:author_id>/images/upload/",
+        views.image_upload_page,
+        name="image-upload",
+    ),
+    path(
         "authors/<uuid:author_id>/entries/<uuid:entry_id>/",
         views.entry_detail_page,
         name="entry-detail",
@@ -60,6 +65,16 @@ urlpatterns = [
     path(
         "api/stream/",
         views.stream_api,
+    ),
+    path(
+        "api/media/images/<uuid:image_id>/",
+        views.serve_hosted_image,
+        name="serve-hosted-image",
+    ),
+    path(
+        "api/authors/<uuid:author_id>/images",
+        views.image_upload_api,
+        name="image-upload-api",
     ),
     path(
         "api/authors/<uuid:author_id>/entries",

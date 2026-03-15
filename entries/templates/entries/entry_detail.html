@@ -7,12 +7,53 @@
     <button type="submit">Back to stream</button>
   </form>
   <title>{{ entry.title|default:"Entry" }}</title>
+<!-- Clickable images assisted by chatgpt on 14 March 2026 21:40 with prompt: "Can images be clickable so that it pops up in an elevated layer" -->
+
   <style>
     .comment-block { margin-bottom: 1em; padding: 0.5em; border: 1px solid #ddd; border-radius: 4px; }
     .comment-author { font-weight: bold; }
     .comment-date { font-size: 0.9em; color: #666; margin-bottom: 0.25em; }
     .comment-text { white-space: pre-wrap; word-wrap: break-word; max-width: 100%; overflow-wrap: break-word; }
     .entry-markdown { max-width: 100%; }
+    .entry-image img, .entry-images img, .entry-markdown img {
+      max-width: min(480px, 100%);
+      max-height: 360px;
+      width: auto;
+      height: auto;
+      object-fit: contain;
+      cursor: pointer;
+    }
+    .image-lightbox {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.9);
+      z-index: 9999;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+    }
+    .image-lightbox.is-open { display: flex; }
+    .image-lightbox img {
+      max-width: 95vw;
+      max-height: 95vh;
+      width: auto;
+      height: auto;
+      object-fit: contain;
+      cursor: default;
+      pointer-events: auto;
+    }
+    .image-lightbox-close {
+      position: absolute;
+      top: 1rem;
+      right: 1rem;
+      color: #fff;
+      font-size: 2rem;
+      line-height: 1;
+      cursor: pointer;
+      pointer-events: auto;
+      padding: 0.25rem;
+    }
   </style>
 </head>
 <body>
@@ -22,17 +63,38 @@
   <p><strong>Published:</strong> {{ entry.published }}</p>
   <p><strong>Visibility:</strong> {{ entry.visibility }}</p>
 
-  {% if entry.description %}
-    <p><strong>Description:</strong> {{ entry.description }}</p>
-  {% endif %}
-
-  <h2>Content ({{ entry.content_type }})</h2>
-  {% if entry.content_type == "text/markdown" %}
-    <div class="entry-markdown">
-      {{ entry.content|render_markdown|safe }}
+  <h2>Content</h2>
+  {% if entry.image_urls %}
+    {% comment %}Text above images (Twitter-style){% endcomment %}
+    {% if entry.content %}
+      {% if entry.content_type == "text/markdown" %}
+        <div class="entry-markdown">{{ entry.content|render_markdown|safe }}</div>
+      {% else %}
+        <pre>{{ entry.content }}</pre>
+      {% endif %}
+    {% endif %}
+    <div class="entry-images">
+      {% for url in entry.image_urls %}
+        <figure class="entry-image">
+          <img src="{{ url }}" alt="{{ entry.title|default:'Image' }}" />
+        </figure>
+      {% endfor %}
     </div>
+  {% elif entry.content_type == "image" or entry.content_type == "image/png" or entry.content_type == "image/jpeg" %}
+    {% comment %}Legacy: single image in content{% endcomment %}
+    {% if entry.content %}
+      <figure class="entry-image">
+        <img src="{{ entry.content }}" alt="{{ entry.title|default:'Image' }}" />
+      </figure>
+    {% endif %}
   {% else %}
-    <pre>{{ entry.content }}</pre>
+    {% if entry.content %}
+      {% if entry.content_type == "text/markdown" %}
+        <div class="entry-markdown">{{ entry.content|render_markdown|safe }}</div>
+      {% else %}
+        <pre>{{ entry.content }}</pre>
+      {% endif %}
+    {% endif %}
   {% endif %}
 
   {% if current_author.uuid == author.uuid %}
@@ -119,6 +181,45 @@
     <button type="submit">Post comment</button>
   </form>
   {% endif %}
+
+<!-- Clickable images assisted by chatgpt on 14 March 2026 21:40 with prompt: "Can images be clickable so that it pops up in an elevated layer" -->
+
+  <div id="image-lightbox" class="image-lightbox" aria-hidden="true">
+    <span class="image-lightbox-close" title="Close">&times;</span>
+    <img src="" alt="" />
+  </div>
+  <script>
+    (function() {
+      var lb = document.getElementById('image-lightbox');
+      var lbImg = lb && lb.querySelector('img');
+      var close = lb && lb.querySelector('.image-lightbox-close');
+      function openLightbox(src) {
+        if (!lb || !lbImg) return;
+        lbImg.src = src;
+        lb.classList.add('is-open');
+        lb.setAttribute('aria-hidden', 'false');
+      }
+      function closeLightbox() {
+        if (!lb) return;
+        lb.classList.remove('is-open');
+        lb.setAttribute('aria-hidden', 'true');
+      }
+      if (lb) {
+        lb.addEventListener('click', function(e) {
+          if (e.target === lb || e.target === close) closeLightbox();
+        });
+        document.addEventListener('keydown', function(e) {
+          if (e.key === 'Escape') closeLightbox();
+        });
+      }
+      document.querySelectorAll('.entry-image img, .entry-images img, .entry-markdown img').forEach(function(img) {
+        img.addEventListener('click', function(e) {
+          e.preventDefault();
+          openLightbox(img.src);
+        });
+      });
+    })();
+  </script>
 </body>
 </html>
 

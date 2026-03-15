@@ -1,9 +1,10 @@
 import json
+import mimetypes
 from datetime import datetime, timezone
 from uuid import UUID
 
 from django.conf import settings
-from django.db.models import Count
+from django.db.models import Count, Q
 from django.http import (
     HttpRequest,
     HttpResponse,
@@ -13,17 +14,48 @@ from django.http import (
     JsonResponse,
 )
 from django.shortcuts import get_object_or_404, redirect, render
+from django.urls import reverse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
+from django.http import FileResponse
 
 from authors.models import Author, AuthorAccount
 from config.core.permissions import user_matches_author_uuid
+from follows.models import FollowRelationship
 
 from interactions.models import Comment, EntryLike
 from interactions.serializers import comments_list_json, likes_list_json
 
 from .forms import EntryDeleteForm, EntryForm
-from .models import Entry
+from .models import Entry, HostedImage
+
+# This file is assisted by CoPilot on 14 March 2026 22:10 with the prompt
+# "Help me fix these errors "ERROR MESSAGES" in the views.py file for image hosting in entries in Django"
+
+def _hosted_image_canonical_url(request: HttpRequest, hosted: HostedImage) -> str:
+    """Return the canonical URL for a hosted image (works in production, not tied to DEBUG/MEDIA)."""
+    path = reverse("entries:serve-hosted-image", args=[hosted.uuid])
+    return request.build_absolute_uri(path)
+
+
+def _build_image_urls_from_request(request: HttpRequest, author) -> list:
+    """Build ordered list of image URLs from uploaded files and pasted URL text."""
+    urls = []
+    allowed = {"image/png", "image/jpeg", "image/gif", "image/webp"}
+    for f in request.FILES.getlist("image_files") or []:
+        if f.content_type in allowed:
+            try:
+                hosted = HostedImage.objects.create(uploaded_by=author, file=f)
+                urls.append(_hosted_image_canonical_url(request, hosted))
+            except Exception:
+                pass
+    text = (request.POST.get("image_urls_text") or "").strip()
+    for part in text.replace(",", "\n").splitlines():
+        part = part.strip()
+        if part and (part.startswith("http://") or part.startswith("https://")):
+            urls.append(part)
+    return urls
+
 
 # This file is assisted by CoPilot on 27 Feb 2026 02:10 with the prompt
 # "Help me create a views.py file for entries in Django"
@@ -86,7 +118,6 @@ def _entry_to_json(entry: Entry) -> dict:
         "title": entry.title,
         "id": entry_id,
         "web": web,
-        "description": entry.description,
         "contentType": entry.content_type,
         "content": entry.content,
         "author": {
@@ -104,23 +135,86 @@ def _entry_to_json(entry: Entry) -> dict:
         "published": entry.published.astimezone(timezone.utc).isoformat(),
         "updated_at": entry.updated_at.astimezone(timezone.utc).isoformat(),
         "visibility": entry.visibility,
+        "image_urls": getattr(entry, "image_urls", None) or [],
     }
 
 
-def _stream_entries_queryset():
-    """
-    Canonical stream queryset used by both HTML and API stream endpoints.
+def _can_view_entry(entry: Entry, viewer: Author | None) -> bool:
+    if not entry.is_visible:
+        return False
+    if entry.visibility == Entry.VISIBILITY_PUBLIC or entry.visibility == Entry.VISIBILITY_UNLISTED:
+        return True
+    if entry.visibility == Entry.VISIBILITY_FRIENDS:
+        if not viewer:
+            return False
+        if viewer.uuid == entry.author_id:
+            return True
+        return FollowRelationship.are_friends(viewer, entry.author)
+    return False
 
-    "Known to this node" currently means entries present in this node's Entry
-    table (local entries, plus any remote entries if/when they are stored here).
+
+def get_profile_entry_visibilities(viewer, author) -> list:
+    if not author:
+        return [Entry.VISIBILITY_PUBLIC]
+    if viewer and viewer.uuid == author.uuid:
+        return [
+            Entry.VISIBILITY_PUBLIC,
+            Entry.VISIBILITY_FRIENDS,
+            Entry.VISIBILITY_UNLISTED,
+        ]
+    if viewer and FollowRelationship.are_friends(viewer, author):
+        return [
+            Entry.VISIBILITY_PUBLIC,
+            Entry.VISIBILITY_FRIENDS,
+            Entry.VISIBILITY_UNLISTED,
+        ]
+    if viewer and FollowRelationship.objects.filter(
+        follower=viewer,
+        followee=author,
+        status=FollowRelationship.Status.APPROVED,
+    ).exists():
+        return [Entry.VISIBILITY_PUBLIC, Entry.VISIBILITY_UNLISTED]
+    return [Entry.VISIBILITY_PUBLIC]
+
+
+def _stream_entries_queryset(request: HttpRequest | None = None):
     """
-    return (
+    Canonical stream queryset: public entries for anonymous;
+    for authenticated authors, also include unlisted from followed authors
+    and friends-only from friends.
+    """
+    base = (
         Entry.objects.filter(is_deleted=False, deleted_at__isnull=True)
-        .filter(visibility=Entry.VISIBILITY_PUBLIC)
         .exclude(visibility=Entry.VISIBILITY_DELETED)
         .select_related("author")
-        .order_by("-updated_at", "-published", "-uuid")
     )
+    viewer = _get_current_author(request) if request else None
+    if not viewer:
+        return base.filter(visibility=Entry.VISIBILITY_PUBLIC).order_by(
+            "-updated_at", "-published", "-uuid"
+        )
+    # Friends: authors with mutual APPROVED follow
+    friend_ids = set(
+        FollowRelationship.friends_of(viewer).values_list("uuid", flat=True)
+    )
+    # Following: authors this viewer follows (APPROVED)
+    following_ids = set(
+        FollowRelationship.objects.filter(
+            follower=viewer, status=FollowRelationship.Status.APPROVED
+        ).values_list("followee_id", flat=True)
+    )
+    # Show: PUBLIC (all) OR UNLISTED (from followed) OR FRIENDS (from friends)
+    return base.filter(
+        Q(visibility=Entry.VISIBILITY_PUBLIC)
+        | (
+            Q(visibility=Entry.VISIBILITY_UNLISTED)
+            & Q(author_id__in=following_ids)
+        )
+        | (
+            Q(visibility=Entry.VISIBILITY_FRIENDS)
+            & Q(author_id__in=friend_ids)
+        )
+    ).order_by("-updated_at", "-published", "-uuid")
 
 
 # ---------------------------------------------------------------------------
@@ -130,7 +224,7 @@ def _stream_entries_queryset():
 
 @require_http_methods(["GET"])
 def stream_page(request: HttpRequest) -> HttpResponse:
-    entries = list(_stream_entries_queryset())
+    entries = list(_stream_entries_queryset(request))
     entry_ids = [e.uuid for e in entries]
     like_counts = dict(
         EntryLike.objects.filter(entry_id__in=entry_ids)
@@ -185,13 +279,15 @@ def entry_detail_page(
         author=author,
         is_deleted=False,
     )
+    current_author = _get_current_author(request)
+    if not _can_view_entry(entry, current_author):
+        return HttpResponseForbidden("You do not have permission to view this entry.")
     comments = (
         Comment.objects.filter(entry=entry)
         .select_related("author")
         .order_by("-published")[:20]
     )
     like_count = EntryLike.objects.filter(entry=entry).count()
-    current_author = _get_current_author(request)
     current_user_has_liked = (
         current_author is not None
         and EntryLike.objects.filter(author=current_author, entry=entry).exists()
@@ -290,10 +386,11 @@ def entry_create_page(request: HttpRequest, author_id: UUID) -> HttpResponse:
         return HttpResponseForbidden("Not authorized for this author.")
 
     if request.method == "POST":
-        form = EntryForm(request.POST)
+        form = EntryForm(request.POST, request.FILES)
         if form.is_valid():
             entry: Entry = form.save(commit=False)
             entry.author = author
+            entry.image_urls = _build_image_urls_from_request(request, author)
             entry.save()
             return redirect("entries:entry-detail", author_id=author.uuid, entry_id=entry.uuid)
     else:
@@ -306,6 +403,7 @@ def entry_create_page(request: HttpRequest, author_id: UUID) -> HttpResponse:
             "author": author,
             "form": form,
             "is_create": True,
+            "existing_image_urls_text": "",
         },
     )
 
@@ -325,12 +423,16 @@ def entry_edit_page(
     )
 
     if request.method == "POST":
-        form = EntryForm(request.POST, instance=entry)
+        form = EntryForm(request.POST, request.FILES, instance=entry)
         if form.is_valid():
-            form.save()
+            entry = form.save(commit=False)
+            entry.image_urls = _build_image_urls_from_request(request, author)
+            entry.save()
             return redirect("entries:entry-detail", author_id=author.uuid, entry_id=entry.uuid)
     else:
         form = EntryForm(instance=entry)
+
+    existing_image_urls_text = "\n".join(entry.image_urls or [])
 
     return render(
         request,
@@ -340,6 +442,7 @@ def entry_edit_page(
             "form": form,
             "entry": entry,
             "is_create": False,
+            "existing_image_urls_text": existing_image_urls_text,
         },
     )
 
@@ -381,13 +484,99 @@ def entry_delete_page(
 
 
 # ---------------------------------------------------------------------------
-# API views (local-only REST style)
+# Image hosting (node-hosted images for CommonMark)
+# Assisted by CoPilot on 14 March 2026 22:10
+# ---------------------------------------------------------------------------
+
+
+@require_http_methods(["GET"])
+def serve_hosted_image(request: HttpRequest, image_id: UUID) -> HttpResponse:
+    """
+    Serve a hosted image by UUID.
+    Node admins host images; this URL is what users paste into CommonMark.
+    """
+    hosted = get_object_or_404(HostedImage, pk=image_id)
+    if not hosted.file:
+        return HttpResponseBadRequest("Image file missing.")
+    try:
+        f = hosted.file.open("rb")
+    except (FileNotFoundError, OSError):
+        return HttpResponseBadRequest("Image file not found on disk.")
+    content_type, _ = mimetypes.guess_type(hosted.file.name)
+    if not content_type:
+        content_type = "application/octet-stream"
+    response = FileResponse(f, as_attachment=False, filename=hosted.file.name.split("/")[-1])
+    response["Content-Type"] = content_type
+    return response
+
+
+@require_http_methods(["GET", "POST"])
+def image_upload_page(request: HttpRequest, author_id: UUID) -> HttpResponse:
+    author = get_object_or_404(Author, pk=author_id, is_deleted=False)
+    if not user_matches_author_uuid(request, author.uuid):
+        return HttpResponseForbidden("Not authorized for this author.")
+    if request.method == "POST":
+        file = request.FILES.get("file") or request.FILES.get("image")
+        if not file:
+            return render(
+                request,
+                "entries/image_upload.html",
+                {"author": author, "error": "No file selected."},
+            )
+        allowed = {"image/png", "image/jpeg", "image/gif", "image/webp"}
+        if file.content_type not in allowed:
+            return render(
+                request,
+                "entries/image_upload.html",
+                {"author": author, "error": f"Unsupported type. Use: {', '.join(sorted(allowed))}"},
+            )
+        try:
+            hosted = HostedImage.objects.create(uploaded_by=author, file=file)
+            url = _hosted_image_canonical_url(request, hosted)
+            return render(
+                request,
+                "entries/image_upload.html",
+                {"author": author, "uploaded_url": url, "uploaded_uuid": hosted.uuid},
+            )
+        except Exception as e:
+            return render(
+                request,
+                "entries/image_upload.html",
+                {"author": author, "error": str(e)},
+            )
+    return render(request, "entries/image_upload.html", {"author": author})
+
+
+@require_http_methods(["POST"])
+def image_upload_api(request: HttpRequest, author_id: UUID) -> HttpResponse:
+    author = get_object_or_404(Author, pk=author_id, is_deleted=False)
+    if not user_matches_author_uuid(request, author.uuid):
+        return HttpResponseForbidden("Not authorized for this author.")
+    file = request.FILES.get("file") or request.FILES.get("image")
+    if not file:
+        return HttpResponseBadRequest("No file or image in request.")
+    # Accept common image types
+    allowed = {"image/png", "image/jpeg", "image/gif", "image/webp"}
+    if file.content_type not in allowed:
+        return HttpResponseBadRequest(
+            f"Unsupported content type. Allowed: {', '.join(sorted(allowed))}"
+        )
+    try:
+        hosted = HostedImage.objects.create(uploaded_by=author, file=file)
+    except Exception as e:
+        return HttpResponseBadRequest(str(e))
+    url = _hosted_image_canonical_url(request, hosted)
+    return JsonResponse({"url": url, "uuid": str(hosted.uuid)}, status=201)
+
+
+# ---------------------------------------------------------------------------
+# API views
 # ---------------------------------------------------------------------------
 
 
 @require_http_methods(["GET"])
 def stream_api(request: HttpRequest) -> HttpResponse:
-    queryset = _stream_entries_queryset()
+    queryset = _stream_entries_queryset(request)
     page_number, size, count, page_items = _paginate_queryset(request, queryset)
     return JsonResponse(
         {
@@ -442,6 +631,18 @@ def author_entries_api(request: HttpRequest, author_id: UUID) -> HttpResponse:
             .exclude(visibility=Entry.VISIBILITY_DELETED)
             .order_by("-published")
         )
+        viewer = _get_current_author(request)
+        if viewer and viewer.uuid == author.uuid:
+            pass  # owner sees all
+        elif viewer and FollowRelationship.are_friends(viewer, author):
+            queryset = queryset.filter(
+                visibility__in=[
+                    Entry.VISIBILITY_PUBLIC,
+                    Entry.VISIBILITY_FRIENDS,
+                ]
+            )
+        else:
+            queryset = queryset.filter(visibility=Entry.VISIBILITY_PUBLIC)
         page_number, size, count, page_items = _paginate_queryset(request, queryset)
         return JsonResponse(
             {
@@ -463,7 +664,6 @@ def author_entries_api(request: HttpRequest, author_id: UUID) -> HttpResponse:
         return HttpResponseBadRequest(str(exc))
 
     title = payload.get("title", "")
-    description = payload.get("description", "")
     content = payload.get("content")
     content_type = payload.get("contentType") or Entry.CONTENT_TEXT_PLAIN
     visibility = payload.get("visibility") or Entry.VISIBILITY_PUBLIC
@@ -472,7 +672,7 @@ def author_entries_api(request: HttpRequest, author_id: UUID) -> HttpResponse:
         return HttpResponseBadRequest("Field 'content' is required.")
 
     if content_type not in dict(Entry.CONTENT_TYPE_CHOICES):
-        return HttpResponseBadRequest("Unsupported contentType for Part 1.")
+        return HttpResponseBadRequest("Unsupported contentType.")
 
     if visibility not in dict(Entry.VISIBILITY_CHOICES):
         return HttpResponseBadRequest("Unsupported visibility value.")
@@ -480,7 +680,6 @@ def author_entries_api(request: HttpRequest, author_id: UUID) -> HttpResponse:
     entry = Entry.objects.create(
         author=author,
         title=title,
-        description=description,
         content=content,
         content_type=content_type,
         visibility=visibility,
@@ -502,6 +701,9 @@ def entry_detail_api(
     if request.method == "GET":
         if not entry.is_visible:
             return HttpResponseBadRequest("Entry has been deleted.")
+        viewer = _get_current_author(request)
+        if not _can_view_entry(entry, viewer):
+            return HttpResponseForbidden("You do not have permission to view this entry.")
         return JsonResponse(_entry_to_json(entry))
 
     if not user_matches_author_uuid(request, author.uuid):
@@ -517,7 +719,6 @@ def entry_detail_api(
             return HttpResponseBadRequest(str(exc))
 
         title = payload.get("title", entry.title)
-        description = payload.get("description", entry.description)
         content = payload.get("content", entry.content)
         content_type = payload.get("contentType", entry.content_type)
         visibility = payload.get("visibility", entry.visibility)
@@ -526,13 +727,12 @@ def entry_detail_api(
             return HttpResponseBadRequest("Field 'content' is required.")
 
         if content_type not in dict(Entry.CONTENT_TYPE_CHOICES):
-            return HttpResponseBadRequest("Unsupported contentType for Part 1.")
+            return HttpResponseBadRequest("Unsupported contentType.")
 
         if visibility not in dict(Entry.VISIBILITY_CHOICES):
             return HttpResponseBadRequest("Unsupported visibility value.")
 
         entry.title = title
-        entry.description = description
         entry.content = content
         entry.content_type = content_type
         entry.visibility = visibility
