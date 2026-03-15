@@ -404,3 +404,97 @@ Likes are per (author, entry); at most one like per author per entry.
 #### Response
 
 - **Status**: `204 No Content` on success. `400 Bad Request` if author cannot be resolved. If there was no like, `204` is still returned.
+
+---
+
+## Comment Likes API
+
+Comment likes are per (author, comment); at most one like per author per comment.
+
+### GET /api/authors/{AUTHOR_SERIAL}/entries/{ENTRY_SERIAL}/comments/{COMMENT_SERIAL}/likes
+
+- **When to use**: List who liked a comment.
+- **Auth**: None required for comments the caller can access.
+- **Query params**: `page` (optional, default `1`), `size` (optional, default `10`).
+
+#### Response
+
+- **Status**: `200 OK`.
+- **Body**: A `likes` object with `type`, `id`, `page_number`, `size`, `count`, and `src` (array of like objects). Each like has `type`, `author`, `published`, `id`, and `object` (the comment FQID).
+
+### POST /api/authors/{AUTHOR_SERIAL}/entries/{ENTRY_SERIAL}/comments/{COMMENT_SERIAL}/likes
+
+- **When to use**: Record a like from an author on a comment. Idempotent: if the author already liked the comment, returns `200` with the existing like.
+- **Auth**: Author must be identified via session or request body (`authorId`).
+- **Body** (`application/json`): Optional. May include `authorId` (author UUID) if not using session.
+
+#### Response
+
+- **Status**: `201 Created` when a new like is created, or `200 OK` when the like already existed. Body is the like object. `400 Bad Request` if author cannot be resolved.
+
+### DELETE /api/authors/{AUTHOR_SERIAL}/entries/{ENTRY_SERIAL}/comments/{COMMENT_SERIAL}/likes
+
+- **When to use**: Remove the like (unlike) for the given author on a comment.
+- **Auth**: Author must be identified via session or request body (`authorId`).
+- **Body** (`application/json`): Optional. May include `authorId` if not using session.
+
+#### Response
+
+- **Status**: `204 No Content` on success. `400 Bad Request` if author cannot be resolved.
+
+### UI: Comment Like/Unlike
+
+Each comment on the entry detail page shows:
+- The total like count (e.g. "3 likes").
+- A **Like** or **Unlike** button (depending on whether the current user has already liked it).
+
+HTML endpoints:
+- `POST /authors/{AUTHOR_SERIAL}/entries/{ENTRY_SERIAL}/comments/{COMMENT_SERIAL}/like/` – like a comment, redirects back to entry detail.
+- `POST /authors/{AUTHOR_SERIAL}/entries/{ENTRY_SERIAL}/comments/{COMMENT_SERIAL}/unlike/` – unlike a comment, redirects back to entry detail.
+
+---
+
+## User Registration (Signup with Admin Approval)
+
+### GET /accounts/signup/
+
+- **Purpose**: Render the signup form for new users.
+- **Auth**: None required (public page).
+
+### POST /accounts/signup/
+
+- **Purpose**: Create a new user account pending admin approval.
+- **Auth**: None required (public page).
+- **Body** (`application/x-www-form-urlencoded`):
+  - `username` (string, required) -- the login username
+  - `display_name` (string, required) -- display name for the Author profile
+  - `password1` (string, required) -- password
+  - `password2` (string, required) -- password confirmation (must match `password1`)
+
+#### Behaviour
+
+1. Creates a Django `User` with `is_active=False` (cannot log in until approved).
+2. Creates an `Author` profile with the given `display_name`.
+3. Creates an `AuthorAccount` linking the `User` to the `Author`.
+4. Renders a "pending approval" confirmation page.
+
+#### Approval workflow
+
+- A node admin logs into Django admin (`/admin/`).
+- Under **Users**, pending users appear with `is_active = False`.
+- The admin checks the `Active` checkbox (or uses the "Approve selected users" action) to activate the account.
+- Once `is_active = True`, the user can log in at `/accounts/login/`.
+
+#### Example flow
+
+```
+GET /accounts/signup/        -> 200 (signup form)
+POST /accounts/signup/       -> 200 (pending approval page)
+Admin sets is_active=True    -> user can now login
+POST /accounts/login/        -> 302 redirect to follows/ui
+```
+
+#### Error responses
+
+- Duplicate username: re-renders form with "A user with that username already exists."
+- Mismatched passwords: re-renders form with "Passwords do not match."

@@ -3,9 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <form action="{% url 'entries:stream-page' %}" method="get">
-    <button type="submit">Back to stream</button>
-  </form>
+  <p><a href="{% url 'entries:stream-page' %}">Back to stream</a></p>
   <title>{{ entry.title|default:"Entry" }}</title>
   <style>
     .comment-block { margin-bottom: 1em; padding: 0.5em; border: 1px solid #ddd; border-radius: 4px; }
@@ -35,10 +33,13 @@
     <pre>{{ entry.content }}</pre>
   {% endif %}
 
+  {% if current_author.uuid == author.uuid %}
   <p>
     <a href="{% url 'entries:entry-edit' author.uuid entry.uuid %}">Edit</a> |
     <a href="{% url 'entries:entry-delete' author.uuid entry.uuid %}">Delete</a>
   </p>
+  {% endif %}
+
 
   <h3>Likes ({{ like_count }})</h3>
   {% if current_author %}
@@ -86,6 +87,43 @@
           <div class="comment-author">{{ c.author.display_name }}</div>
           <div class="comment-date">{{ c.published }}</div>
           <div class="comment-text">{{ c.comment }}</div>
+          <div class="comment-likes" style="margin-top: 6px; font-size: 0.9em;">
+            <span>{{ c.like_count }} like{{ c.like_count|pluralize }}</span>
+            {% if current_author %}
+              {% if c.current_user_has_liked %}
+                <form action="{% url 'entries:comment-unlike' author.uuid entry.uuid c.uuid %}" method="post" style="display:inline;">
+                  {% csrf_token %}
+                  <button type="submit" style="font-size:0.85em;">Unlike</button>
+                </form>
+              {% else %}
+                <form action="{% url 'entries:comment-like' author.uuid entry.uuid c.uuid %}" method="post" style="display:inline;">
+                  {% csrf_token %}
+                  <button type="submit" style="font-size:0.85em;">Like</button>
+                </form>
+              {% endif %}
+            {% else %}
+              {% if authors %}
+                <form action="{% url 'entries:comment-like' author.uuid entry.uuid c.uuid %}" method="post" style="display:inline;">
+                  {% csrf_token %}
+                  <select name="author_id" style="font-size:0.85em;" required>
+                    {% for a in authors %}
+                      <option value="{{ a.uuid }}">{{ a.display_name }}</option>
+                    {% endfor %}
+                  </select>
+                  <button type="submit" style="font-size:0.85em;">Like</button>
+                </form>
+                <form action="{% url 'entries:comment-unlike' author.uuid entry.uuid c.uuid %}" method="post" style="display:inline;">
+                  {% csrf_token %}
+                  <select name="author_id" style="font-size:0.85em;" required>
+                    {% for a in authors %}
+                      <option value="{{ a.uuid }}">{{ a.display_name }}</option>
+                    {% endfor %}
+                  </select>
+                  <button type="submit" style="font-size:0.85em;">Unlike</button>
+                </form>
+              {% endif %}
+            {% endif %}
+          </div>
         </li>
       {% endfor %}
     </ul>

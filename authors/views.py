@@ -12,7 +12,9 @@ from django.contrib.auth.decorators import login_required
 from config.core.permissions import user_matches_author_uuid
 from follows.models import FollowRelationship
 
-from .forms import AuthorProfileForm
+from django.contrib.auth.models import User
+
+from .forms import AuthorProfileForm, SignupForm
 from .models import Author, AuthorAccount
 
 
@@ -186,15 +188,28 @@ def author_profile_api(request: HttpRequest, author_id: UUID):
 
 @login_required
 def my_profile_redirect(request: HttpRequest):
-    # request.user is the logged-in Django User.
-    # AuthorAccount links User -> Author for your site.
     acct = getattr(request.user, "author_account", None)
-
-    # If logged in but not linked to an Author yet, send them somewhere helpful.
-    # You can change this to a "create author" page later.
     if not acct or not getattr(acct, "author", None):
         return redirect("/")
-
-    # Redirect to the existing author profile page route:
-    # /authors/<uuid>
     return redirect("authors:profile", author_id=acct.author.uuid)
+
+
+@require_http_methods(["GET", "POST"])
+def signup_page(request: HttpRequest):
+    if request.method == "POST":
+        form = SignupForm(request.POST)
+        if form.is_valid():
+            user = User.objects.create_user(
+                username=form.cleaned_data["username"],
+                password=form.cleaned_data["password1"],
+                is_active=False,
+            )
+            author = Author.objects.create(
+                display_name=form.cleaned_data["display_name"],
+            )
+            AuthorAccount.objects.create(user=user, author=author)
+            return render(request, "registration/signup_pending.html")
+    else:
+        form = SignupForm()
+
+    return render(request, "registration/signup.html", {"form": form})

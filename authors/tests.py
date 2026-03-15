@@ -105,3 +105,89 @@ class AuthorProfileTests(TestCase):
         )
 
         self.assertEqual(response.status_code, 403)
+
+
+class SignupTests(TestCase):
+    def setUp(self):
+        self.client = Client()
+
+    def test_signup_page_renders(self):
+        response = self.client.get(reverse("signup"))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Sign Up")
+
+    def test_successful_signup_creates_inactive_user_and_author(self):
+        response = self.client.post(
+            reverse("signup"),
+            data={
+                "username": "newuser",
+                "display_name": "New User",
+                "password1": "strongPass99",
+                "password2": "strongPass99",
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "pending admin approval")
+
+        user = User.objects.get(username="newuser")
+        self.assertFalse(user.is_active)
+
+        account = AuthorAccount.objects.get(user=user)
+        self.assertEqual(account.author.display_name, "New User")
+
+    def test_inactive_user_cannot_login(self):
+        self.client.post(
+            reverse("signup"),
+            data={
+                "username": "pending",
+                "display_name": "Pending",
+                "password1": "strongPass99",
+                "password2": "strongPass99",
+            },
+        )
+        logged_in = self.client.login(username="pending", password="strongPass99")
+        self.assertFalse(logged_in)
+
+    def test_approved_user_can_login(self):
+        self.client.post(
+            reverse("signup"),
+            data={
+                "username": "approved",
+                "display_name": "Approved",
+                "password1": "strongPass99",
+                "password2": "strongPass99",
+            },
+        )
+        user = User.objects.get(username="approved")
+        user.is_active = True
+        user.save()
+        logged_in = self.client.login(username="approved", password="strongPass99")
+        self.assertTrue(logged_in)
+
+    def test_signup_mismatched_passwords(self):
+        response = self.client.post(
+            reverse("signup"),
+            data={
+                "username": "mismatch",
+                "display_name": "Mismatch",
+                "password1": "strongPass99",
+                "password2": "differentPass",
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Passwords do not match")
+        self.assertFalse(User.objects.filter(username="mismatch").exists())
+
+    def test_signup_duplicate_username(self):
+        User.objects.create_user(username="taken", password="pass12345")
+        response = self.client.post(
+            reverse("signup"),
+            data={
+                "username": "taken",
+                "display_name": "Dup",
+                "password1": "strongPass99",
+                "password2": "strongPass99",
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "already exists")
