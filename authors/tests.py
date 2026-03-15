@@ -205,5 +205,5 @@ class LogoutTests(TestCase):
 
     def test_logout_clears_session(self):
         self.client.post("/accounts/logout/")
-        response = self.client.get("/stream/")
-        self.assertEqual(response.status_code, 302)  # redirected to login
+        response = self.client.get("/follows/ui")
+        self.assertEqual(response.status_code, 302)  
