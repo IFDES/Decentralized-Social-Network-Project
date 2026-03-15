@@ -20,6 +20,8 @@ from django.contrib import admin
 from django.contrib.auth.views import LoginView
 from django.urls import include, path
 
+from authors import views as author_views
+
 login_view = LoginView.as_view(
     redirect_authenticated_user=True,
     template_name="registration/login.html",
@@ -29,6 +31,7 @@ urlpatterns = [
     path("", login_view, name="login"),
     path("admin/", admin.site.urls),
     path("accounts/login/", login_view),
+    path("accounts/signup/", author_views.signup_page, name="signup"),
     path("accounts/", include("django.contrib.auth.urls")),
 
     path("", include("authors.urls")),

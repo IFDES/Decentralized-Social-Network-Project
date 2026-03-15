@@ -23,7 +23,7 @@ from authors.models import Author, AuthorAccount
 from config.core.permissions import user_matches_author_uuid
 from follows.models import FollowRelationship
 
-from interactions.models import Comment, EntryLike
+from interactions.models import Comment, CommentLike, EntryLike
 from interactions.serializers import comments_list_json, likes_list_json
 
 from .forms import EntryDeleteForm, EntryForm
@@ -279,10 +279,12 @@ def entry_detail_page(
         author=author,
         is_deleted=False,
     )
+    
     current_author = _get_current_author(request)
     if not _can_view_entry(entry, current_author):
         return HttpResponseForbidden("You do not have permission to view this entry.")
-    comments = (
+    
+    comments = list(
         Comment.objects.filter(entry=entry)
         .select_related("author")
         .order_by("-published")[:20]
@@ -292,6 +294,27 @@ def entry_detail_page(
         current_author is not None
         and EntryLike.objects.filter(author=current_author, entry=entry).exists()
     )
+
+    comment_ids = [c.uuid for c in comments]
+    comment_like_counts = dict(
+        CommentLike.objects.filter(comment_id__in=comment_ids)
+        .values("comment_id")
+        .annotate(n=Count("uuid"))
+        .values_list("comment_id", "n")
+    )
+    if current_author:
+        user_liked_comments = set(
+            CommentLike.objects.filter(
+                author=current_author, comment_id__in=comment_ids
+            ).values_list("comment_id", flat=True)
+        )
+    else:
+        user_liked_comments = set()
+
+    for c in comments:
+        c.like_count = comment_like_counts.get(c.uuid, 0)
+        c.current_user_has_liked = c.uuid in user_liked_comments
+
     authors = list(Author.objects.filter(is_deleted=False).order_by("display_name"))
     return render(
         request,
@@ -376,6 +399,48 @@ def entry_unlike_page(
     if not like_author:
         return HttpResponseBadRequest("Unable to determine like author.")
     EntryLike.objects.filter(author=like_author, entry=entry).delete()
+    return redirect("entries:entry-detail", author_id=author.uuid, entry_id=entry.uuid)
+
+
+@require_http_methods(["POST"])
+def comment_like_page(
+    request: HttpRequest, author_id: UUID, entry_id: UUID, comment_id: UUID
+) -> HttpResponse:
+    author = get_object_or_404(Author, pk=author_id, is_deleted=False)
+    entry = get_object_or_404(Entry, pk=entry_id, author=author, is_deleted=False)
+    comment = get_object_or_404(Comment, pk=comment_id, entry=entry)
+    like_author = _get_current_author(request)
+    if not like_author:
+        author_pk = request.POST.get("author_id")
+        if author_pk:
+            try:
+                like_author = Author.objects.get(pk=UUID(author_pk), is_deleted=False)
+            except (ValueError, Author.DoesNotExist):
+                pass
+    if not like_author:
+        return HttpResponseBadRequest("Unable to determine like author.")
+    CommentLike.objects.get_or_create(author=like_author, comment=comment)
+    return redirect("entries:entry-detail", author_id=author.uuid, entry_id=entry.uuid)
+
+
+@require_http_methods(["POST"])
+def comment_unlike_page(
+    request: HttpRequest, author_id: UUID, entry_id: UUID, comment_id: UUID
+) -> HttpResponse:
+    author = get_object_or_404(Author, pk=author_id, is_deleted=False)
+    entry = get_object_or_404(Entry, pk=entry_id, author=author, is_deleted=False)
+    comment = get_object_or_404(Comment, pk=comment_id, entry=entry)
+    like_author = _get_current_author(request)
+    if not like_author:
+        author_pk = request.POST.get("author_id")
+        if author_pk:
+            try:
+                like_author = Author.objects.get(pk=UUID(author_pk), is_deleted=False)
+            except (ValueError, Author.DoesNotExist):
+                pass
+    if not like_author:
+        return HttpResponseBadRequest("Unable to determine like author.")
+    CommentLike.objects.filter(author=like_author, comment=comment).delete()
     return redirect("entries:entry-detail", author_id=author.uuid, entry_id=entry.uuid)
 
 

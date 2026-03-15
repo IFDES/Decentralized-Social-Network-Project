@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Sign Up</title>
+  <style>
+    body { font-family: system-ui, Arial, sans-serif; max-width: 520px; margin: 40px auto; padding: 0 16px; }
+    form { border: 1px solid #ddd; border-radius: 12px; padding: 16px; }
+    label { display: block; margin-top: 10px; }
+    input { width: 100%; padding: 8px; box-sizing: border-box; }
+    button { margin-top: 14px; padding: 10px 12px; }
+    .error { color: #b00020; }
+    .errors li { color: #b00020; }
+  </style>
+</head>
+<body>
+  <h1>Sign Up</h1>
+
+  {% if form.errors %}
+    <ul class="errors">
+      {% for field, errs in form.errors.items %}
+        {% for e in errs %}
+          <li>{{ e }}</li>
+        {% endfor %}
+      {% endfor %}
+    </ul>
+  {% endif %}
+
+  <form method="post">
+    {% csrf_token %}
+
+    <label for="id_username">Username</label>
+    <input type="text" name="username" id="id_username" maxlength="150"
+           value="{{ form.username.value|default:'' }}" required>
+
+    <label for="id_display_name">Display name</label>
+    <input type="text" name="display_name" id="id_display_name" maxlength="120"
+           value="{{ form.display_name.value|default:'' }}" required>
+
+    <label for="id_password1">Password</label>
+    <input type="password" name="password1" id="id_password1" required>
+
+    <label for="id_password2">Confirm password</label>
+    <input type="password" name="password2" id="id_password2" required>
+
+    <button type="submit">Sign up</button>
+  </form>
+
+  <p>Already have an account? <a href="{% url 'login' %}">Log in</a></p>
+</body>
+</html>

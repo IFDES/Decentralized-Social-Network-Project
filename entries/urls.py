@@ -48,6 +48,16 @@ urlpatterns = [
         name="entry-unlike",
     ),
     path(
+        "authors/<uuid:author_id>/entries/<uuid:entry_id>/comments/<uuid:comment_id>/like/",
+        views.comment_like_page,
+        name="comment-like",
+    ),
+    path(
+        "authors/<uuid:author_id>/entries/<uuid:entry_id>/comments/<uuid:comment_id>/unlike/",
+        views.comment_unlike_page,
+        name="comment-unlike",
+    ),
+    path(
         "authors/<uuid:author_id>/entries/<uuid:entry_id>/edit/",
         views.entry_edit_page,
         name="entry-edit",
@@ -94,6 +104,15 @@ urlpatterns = [
     path(
         "api/authors/<uuid:author_id>/entries/<uuid:entry_id>/comments/",
         interactions_views.entry_comments_api,
+    ),
+    path(
+        "api/authors/<uuid:author_id>/entries/<uuid:entry_id>/comments/<uuid:comment_id>/likes",
+        interactions_views.comment_likes_api,
+        name="comment-likes-api",
+    ),
+    path(
+        "api/authors/<uuid:author_id>/entries/<uuid:entry_id>/comments/<uuid:comment_id>/likes/",
+        interactions_views.comment_likes_api,
     ),
     path(
         "api/authors/<uuid:author_id>/entries/<uuid:entry_id>/comments/<path:comment_ref>",

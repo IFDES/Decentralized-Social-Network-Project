@@ -1,11 +1,12 @@
 import json
 
+from django.contrib.auth.models import User
 from django.test import Client, TestCase
 from django.urls import reverse
 
-from authors.models import Author
+from authors.models import Author, AuthorAccount
 from entries.models import Entry
-from interactions.models import Comment, EntryLike
+from interactions.models import Comment, CommentLike, EntryLike
 
 
 class EntryCommentsApiTests(TestCase):
@@ -169,4 +170,124 @@ class EntryLikesApiTests(TestCase):
         url = reverse("entries:entry-likes-api", args=[self.entry_author.uuid, self.entry.uuid])
         response = self.client.delete(url, content_type="application/json")
         self.assertEqual(response.status_code, 400)
+
+
+class CommentLikesApiTests(TestCase):
+    def setUp(self):
+        self.client = Client()
+        self.entry_author = Author.objects.create(display_name="Entry Author")
+        self.commenter = Author.objects.create(display_name="Commenter")
+        self.liker = Author.objects.create(display_name="Liker")
+        self.entry = Entry.objects.create(author=self.entry_author, content="Hello")
+        self.comment = Comment.objects.create(
+            author=self.commenter, entry=self.entry, comment="Nice post"
+        )
+
+    def _url(self):
+        return reverse(
+            "entries:comment-likes-api",
+            args=[self.entry_author.uuid, self.entry.uuid, self.comment.uuid],
+        )
+
+    def test_get_comment_likes_empty(self):
+        response = self.client.get(self._url())
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["type"], "likes")
+        self.assertEqual(payload["count"], 0)
+        self.assertEqual(payload["src"], [])
+
+    def test_post_comment_like_and_list(self):
+        response = self.client.post(
+            self._url(),
+            data=json.dumps({"authorId": str(self.liker.uuid)}),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 201)
+        payload = response.json()
+        self.assertEqual(payload["type"], "like")
+
+        response = self.client.get(self._url())
+        payload = response.json()
+        self.assertEqual(payload["count"], 1)
+
+    def test_post_comment_like_idempotent(self):
+        for _ in range(2):
+            self.client.post(
+                self._url(),
+                data=json.dumps({"authorId": str(self.liker.uuid)}),
+                content_type="application/json",
+            )
+        response = self.client.get(self._url())
+        self.assertEqual(response.json()["count"], 1)
+
+    def test_delete_comment_like(self):
+        CommentLike.objects.create(author=self.liker, comment=self.comment)
+        response = self.client.delete(
+            self._url(),
+            data=json.dumps({"authorId": str(self.liker.uuid)}),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 204)
+        response = self.client.get(self._url())
+        self.assertEqual(response.json()["count"], 0)
+
+    def test_delete_comment_like_requires_author(self):
+        response = self.client.delete(self._url(), content_type="application/json")
+        self.assertEqual(response.status_code, 400)
+
+    def test_post_comment_like_requires_author(self):
+        response = self.client.post(
+            self._url(),
+            data=json.dumps({}),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 400)
+
+
+class CommentLikeUITests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(username="liker", password="pass12345")
+        self.author = Author.objects.create(display_name="Liker Author")
+        AuthorAccount.objects.create(user=self.user, author=self.author)
+
+        self.entry_author = Author.objects.create(display_name="Entry Author")
+        self.entry = Entry.objects.create(author=self.entry_author, content="Hi")
+        self.comment = Comment.objects.create(
+            author=self.entry_author, entry=self.entry, comment="Test comment"
+        )
+        self.client.login(username="liker", password="pass12345")
+
+    def test_like_comment_via_ui(self):
+        url = reverse(
+            "entries:comment-like",
+            args=[self.entry_author.uuid, self.entry.uuid, self.comment.uuid],
+        )
+        response = self.client.post(url)
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(
+            CommentLike.objects.filter(author=self.author, comment=self.comment).exists()
+        )
+
+    def test_unlike_comment_via_ui(self):
+        CommentLike.objects.create(author=self.author, comment=self.comment)
+        url = reverse(
+            "entries:comment-unlike",
+            args=[self.entry_author.uuid, self.entry.uuid, self.comment.uuid],
+        )
+        response = self.client.post(url)
+        self.assertEqual(response.status_code, 302)
+        self.assertFalse(
+            CommentLike.objects.filter(author=self.author, comment=self.comment).exists()
+        )
+
+    def test_entry_detail_shows_comment_like_count(self):
+        CommentLike.objects.create(author=self.author, comment=self.comment)
+        url = reverse(
+            "entries:entry-detail",
+            args=[self.entry_author.uuid, self.entry.uuid],
+        )
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "1 like")
 
