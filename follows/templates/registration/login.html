@@ -35,5 +35,7 @@
   {% if next %}
     <p class="small">After login you will go to: <code>{{ next }}</code></p>
   {% endif %}
+
+  <p>Don't have an account? <a href="{% url 'signup' %}">Sign up</a></p>
 </body>
 </html>

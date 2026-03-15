@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Registration Pending</title>
+  <style>
+    body { font-family: system-ui, Arial, sans-serif; max-width: 520px; margin: 40px auto; padding: 0 16px; }
+    .card { border: 1px solid #ddd; border-radius: 12px; padding: 24px; text-align: center; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Account Created</h1>
+    <p>Your account has been created and is pending admin approval.</p>
+    <p>You will be able to log in once an administrator activates your account.</p>
+    <p><a href="{% url 'login' %}">Back to login</a></p>
+  </div>
+</body>
+</html>

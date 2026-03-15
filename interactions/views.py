@@ -17,8 +17,10 @@ from django.views.decorators.http import require_http_methods  # type: ignore[im
 from authors.models import Author
 from entries.models import Entry
 
-from .models import Comment, EntryLike
+from .models import Comment, CommentLike, EntryLike
 from .serializers import (
+    comment_like_to_json,
+    comment_likes_list_json,
     comment_to_json,
     comments_list_json,
     like_to_json,
@@ -242,4 +244,47 @@ def entry_likes_api(request: HttpRequest, author_id: UUID, entry_id: UUID) -> Ht
 
     # DELETE: unlike
     EntryLike.objects.filter(author=author, entry=entry).delete()
+    return HttpResponse(status=204)
+
+
+@csrf_exempt
+def comment_likes_api(
+    request: HttpRequest, author_id: UUID, entry_id: UUID, comment_id: UUID
+) -> HttpResponse:
+    if request.method not in ("GET", "POST", "DELETE"):
+        return HttpResponseNotAllowed(["GET", "POST", "DELETE"])
+
+    entry_author = get_object_or_404(Author, pk=author_id, is_deleted=False)
+    entry = get_object_or_404(Entry, pk=entry_id, author=entry_author)
+    if not entry.is_visible:
+        return HttpResponseBadRequest("Entry has been deleted.")
+    comment = get_object_or_404(Comment, pk=comment_id, entry=entry)
+
+    if request.method == "GET":
+        queryset = (
+            CommentLike.objects.filter(comment=comment)
+            .select_related("author", "comment")
+            .order_by("-published")
+        )
+        page_number, size, count, page_items = _paginate_queryset(request, queryset)
+        return JsonResponse(comment_likes_list_json(comment, page_number, size, count, page_items))
+
+    try:
+        payload = _parse_json_body(request) if request.body else {}
+    except ValueError as exc:
+        return HttpResponseBadRequest(str(exc))
+
+    author = _resolve_like_author(request, payload)
+    if not author:
+        return HttpResponseBadRequest("Unable to resolve like author.")
+
+    if request.method == "POST":
+        cl, created = CommentLike.objects.get_or_create(
+            author=author,
+            comment=comment,
+        )
+        status_code = 201 if created else 200
+        return JsonResponse(comment_like_to_json(cl), status=status_code)
+
+    CommentLike.objects.filter(author=author, comment=comment).delete()
     return HttpResponse(status=204)

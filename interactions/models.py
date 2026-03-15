@@ -87,3 +87,40 @@ class EntryLike(models.Model):
         if not self.fqid:
             self.ensure_fqid()
             super().save(update_fields=["fqid"])
+
+
+class CommentLike(models.Model):
+    uuid = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    fqid = models.URLField(
+        max_length=500,
+        unique=True,
+        blank=True,
+        null=True,
+        help_text="Fully qualified ID URL for this comment like.",
+    )
+
+    author = models.ForeignKey(Author, related_name="comment_likes", on_delete=models.CASCADE)
+    comment = models.ForeignKey(Comment, related_name="likes", on_delete=models.CASCADE)
+
+    published = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["author", "comment"],
+                name="unique_author_comment_like",
+            ),
+        ]
+        ordering = ["-published"]
+
+    def ensure_fqid(self):
+        if self.fqid:
+            return
+        base = settings.SERVICE_BASE_URL.rstrip("/")
+        self.fqid = f"{base}/api/authors/{self.author.uuid}/liked/{self.uuid}"
+
+    def save(self, *args, **kwargs):
+        super().save(*args, **kwargs)
+        if not self.fqid:
+            self.ensure_fqid()
+            super().save(update_fields=["fqid"])

@@ -5,7 +5,7 @@ from django.conf import settings
 from config.core.serializers import author_to_json
 from entries.models import Entry
 
-from .models import Comment, EntryLike
+from .models import Comment, CommentLike, EntryLike
 
 
 def _build_entry_id(entry: Entry) -> str:
@@ -40,7 +40,7 @@ def _build_likes_api_url(entry: Entry) -> str:
     return f"{base}/api/authors/{entry.author.uuid}/entries/{entry.uuid}/likes"
 
 
-def comment_to_json(comment: Comment) -> dict:
+def comment_to_json(comment: Comment, like_count: int | None = None) -> dict:
     entry = comment.entry
     entry_id = _build_entry_id(entry)
     web = _build_entry_web(entry)
@@ -48,7 +48,7 @@ def comment_to_json(comment: Comment) -> dict:
     base = settings.SERVICE_BASE_URL.rstrip("/")
     comment_id = comment.fqid or f"{base}/api/authors/{comment.author.uuid}/commented/{comment.uuid}"
 
-    return {
+    data = {
         "type": "comment",
         "author": author_to_json(comment.author),
         "comment": comment.comment,
@@ -58,6 +58,9 @@ def comment_to_json(comment: Comment) -> dict:
         "entry": entry_id,
         "web": web,
     }
+    if like_count is not None:
+        data["like_count"] = like_count
+    return data
 
 
 def like_to_json(like: EntryLike) -> dict:
@@ -115,5 +118,46 @@ def likes_list_json(
         "size": size,
         "count": count,
         "src": [like_to_json(l) for l in likes],
+    }
+
+
+def comment_like_to_json(cl: CommentLike) -> dict:
+    comment = cl.comment
+    base = settings.SERVICE_BASE_URL.rstrip("/")
+    like_id = cl.fqid or f"{base}/api/authors/{cl.author.uuid}/liked/{cl.uuid}"
+    comment_id = comment.fqid or f"{base}/api/authors/{comment.author.uuid}/commented/{comment.uuid}"
+
+    return {
+        "type": "like",
+        "author": author_to_json(cl.author),
+        "published": cl.published.astimezone(timezone.utc).isoformat(),
+        "id": like_id,
+        "object": comment_id,
+    }
+
+
+def _build_comment_likes_api_url(comment: Comment) -> str:
+    entry = comment.entry
+    base = settings.SERVICE_BASE_URL.rstrip("/")
+    return (
+        f"{base}/api/authors/{entry.author.uuid}/entries/{entry.uuid}"
+        f"/comments/{comment.uuid}/likes"
+    )
+
+
+def comment_likes_list_json(
+    comment: Comment,
+    page_number: int,
+    size: int,
+    count: int,
+    likes,
+) -> dict:
+    return {
+        "type": "likes",
+        "id": _build_comment_likes_api_url(comment),
+        "page_number": page_number,
+        "size": size,
+        "count": count,
+        "src": [comment_like_to_json(cl) for cl in likes],
     }
 
