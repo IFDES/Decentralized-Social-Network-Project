@@ -291,3 +291,90 @@ class CommentLikeUITests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "1 like")
 
+
+class DeletedEntryEdgeCaseTests(TestCase):
+    """Edge-case tests: commenting/liking on deleted entries should be rejected."""
+
+    def setUp(self):
+        self.client = Client()
+        self.entry_author = Author.objects.create(display_name="Entry Author")
+        self.commenter = Author.objects.create(display_name="Commenter")
+        self.entry = Entry.objects.create(
+            author=self.entry_author,
+            content="Original content",
+        )
+        # Soft-delete the entry
+        from datetime import datetime, timezone as tz
+        self.entry.is_deleted = True
+        self.entry.visibility = "DELETED"
+        self.entry.deleted_at = datetime.now(tz.utc)
+        self.entry.save()
+
+    def test_comment_on_deleted_entry_returns_400(self):
+        """Posting a comment on a deleted entry should return 400."""
+        url = reverse(
+            "entries:entry-comments-api",
+            args=[self.entry_author.uuid, self.entry.uuid],
+        )
+        response = self.client.post(
+            url,
+            data=json.dumps(
+                {
+                    "authorId": str(self.commenter.uuid),
+                    "comment": "Should fail",
+                    "contentType": "text/plain",
+                }
+            ),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 400)
+
+    def test_get_comments_on_deleted_entry_returns_400(self):
+        """Listing comments on a deleted entry should return 400."""
+        url = reverse(
+            "entries:entry-comments-api",
+            args=[self.entry_author.uuid, self.entry.uuid],
+        )
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 400)
+
+    def test_like_deleted_entry_returns_400(self):
+        """Liking a deleted entry should return 400."""
+        url = reverse(
+            "entries:entry-likes-api",
+            args=[self.entry_author.uuid, self.entry.uuid],
+        )
+        response = self.client.post(
+            url,
+            data=json.dumps({"authorId": str(self.commenter.uuid)}),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 400)
+
+    def test_get_likes_on_deleted_entry_returns_400(self):
+        """Listing likes on a deleted entry should return 400."""
+        url = reverse(
+            "entries:entry-likes-api",
+            args=[self.entry_author.uuid, self.entry.uuid],
+        )
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 400)
+
+    def test_like_comment_on_deleted_entry_returns_400(self):
+        """Liking a comment on a deleted entry should return 400."""
+        # Create a comment before the entry was deleted (simulate existing comment)
+        comment = Comment.objects.create(
+            author=self.commenter,
+            entry=self.entry,
+            comment="Pre-existing comment",
+        )
+        url = reverse(
+            "entries:comment-likes-api",
+            args=[self.entry_author.uuid, self.entry.uuid, comment.uuid],
+        )
+        response = self.client.post(
+            url,
+            data=json.dumps({"authorId": str(self.commenter.uuid)}),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 400)

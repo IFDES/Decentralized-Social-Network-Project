@@ -279,6 +279,284 @@ Deleted entries are not included in stream responses.
 
 ---
 
+## Follow API
+
+Follow relationships represent one author wanting to follow another. A follow goes through states: **requesting** (pending approval) → **accepted** (approved) or **rejected** (denied). All follow endpoints are author-scoped and require the caller to be authenticated as the author in the URL path.
+
+FQIDs (fully qualified IDs) used in follow URL paths must be **percent-encoded**, e.g. `http%3A%2F%2F127.0.0.1%3A8000%2Fapi%2Fauthors%2F111`.
+
+### GET /api/authors/{AUTHOR_SERIAL}/following
+
+- **When to use**: List the authors that `{AUTHOR_SERIAL}` is following (includes both pending and approved).
+- **Auth**: Must be authenticated as `{AUTHOR_SERIAL}` (owner-only).
+
+#### Response
+
+- **Status**: `200 OK`, or `403 Forbidden` if not the owner.
+- **Body** (`application/json`):
+
+```json
+{
+  "type": "following",
+  "following": [
+    {
+      "type": "author",
+      "id": "http://127.0.0.1:8000/api/authors/b-uuid",
+      "host": "http://127.0.0.1:8000/api/",
+      "displayName": "UserB",
+      "web": "http://127.0.0.1:8000/authors/b-uuid",
+      "github": "",
+      "profileImage": ""
+    }
+  ]
+}
+```
+
+---
+
+### GET /api/authors/{AUTHOR_SERIAL}/following/{FOREIGN_AUTHOR_FQID}
+
+- **When to use**: Check whether `{AUTHOR_SERIAL}` is following the author identified by `{FOREIGN_AUTHOR_FQID}`.
+- **Auth**: Must be authenticated as `{AUTHOR_SERIAL}`.
+
+#### Response
+
+- **Status**: `200 OK` with the followed author object if a pending or approved relationship exists, or `404 Not Found` if not following.
+- **Body** (`application/json`) on 200:
+
+```json
+{
+  "type": "author",
+  "id": "http://127.0.0.1:8000/api/authors/b-uuid",
+  "host": "http://127.0.0.1:8000/api/",
+  "displayName": "UserB",
+  "web": "http://127.0.0.1:8000/authors/b-uuid",
+  "github": "",
+  "profileImage": ""
+}
+```
+
+### PUT /api/authors/{AUTHOR_SERIAL}/following/{FOREIGN_AUTHOR_FQID}
+
+- **When to use**: Create a follow request from `{AUTHOR_SERIAL}` to `{FOREIGN_AUTHOR_FQID}`. If a previously denied request exists, it is re-set to pending.
+- **Auth**: Must be authenticated as `{AUTHOR_SERIAL}`.
+
+#### Request
+
+- **Method**: `PUT`
+- **Body**: None required.
+
+#### Response
+
+- **Status**: `201 Created` if newly created, `200 OK` if already existed.
+- **Status**: `400 Bad Request` if trying to follow yourself or a remote author (remote not yet supported).
+- **Status**: `403 Forbidden` if not the owner.
+- **Status**: `404 Not Found` if the target author does not exist.
+- **Body** (`application/json`):
+
+```json
+{
+  "type": "follow",
+  "summary": "UserA wants to follow UserB",
+  "state": "requesting",
+  "actor": {
+    "type": "author",
+    "id": "http://127.0.0.1:8000/api/authors/a-uuid",
+    "host": "http://127.0.0.1:8000/api/",
+    "displayName": "UserA",
+    "web": "http://127.0.0.1:8000/authors/a-uuid",
+    "github": "",
+    "profileImage": ""
+  },
+  "object": {
+    "type": "author",
+    "id": "http://127.0.0.1:8000/api/authors/b-uuid",
+    "host": "http://127.0.0.1:8000/api/",
+    "displayName": "UserB",
+    "web": "http://127.0.0.1:8000/authors/b-uuid",
+    "github": "",
+    "profileImage": ""
+  }
+}
+```
+
+### DELETE /api/authors/{AUTHOR_SERIAL}/following/{FOREIGN_AUTHOR_FQID}
+
+- **When to use**: Unfollow the target author. Deletes the follow relationship entirely.
+- **Auth**: Must be authenticated as `{AUTHOR_SERIAL}`.
+
+#### Response
+
+- **Status**: `204 No Content` on success.
+- **Status**: `404 Not Found` if no follow relationship existed.
+- **Status**: `403 Forbidden` if not the owner.
+
+---
+
+### GET /api/authors/{AUTHOR_SERIAL}/followers
+
+- **When to use**: List the approved followers of `{AUTHOR_SERIAL}`.
+- **Auth**: Must be authenticated as `{AUTHOR_SERIAL}` (owner-only).
+
+#### Response
+
+- **Status**: `200 OK`, or `403 Forbidden` if not the owner.
+- **Body** (`application/json`):
+
+```json
+{
+  "type": "followers",
+  "followers": [
+    {
+      "type": "author",
+      "id": "http://127.0.0.1:8000/api/authors/a-uuid",
+      "host": "http://127.0.0.1:8000/api/",
+      "displayName": "UserA",
+      "web": "http://127.0.0.1:8000/authors/a-uuid",
+      "github": "",
+      "profileImage": ""
+    }
+  ]
+}
+```
+
+---
+
+### GET /api/authors/{AUTHOR_SERIAL}/followers/{FOREIGN_AUTHOR_FQID}
+
+- **When to use**: Check whether `{FOREIGN_AUTHOR_FQID}` is an approved follower of `{AUTHOR_SERIAL}`.
+- **Auth**: Must be authenticated as `{AUTHOR_SERIAL}`.
+
+#### Response
+
+- **Status**: `200 OK` with the follower's author object, or `404 Not Found` if not an approved follower.
+
+### PUT /api/authors/{AUTHOR_SERIAL}/followers/{FOREIGN_AUTHOR_FQID}
+
+- **When to use**: Accept a pending follow request from `{FOREIGN_AUTHOR_FQID}`.
+- **Auth**: Must be authenticated as `{AUTHOR_SERIAL}`.
+
+#### Request
+
+- **Method**: `PUT`
+- **Body**: None required.
+
+#### Response
+
+- **Status**: `200 OK` with follow object (state=`accepted`).
+- **Status**: `404 Not Found` if there is no matching pending request.
+- **Status**: `403 Forbidden` if not the owner.
+- **Body** (`application/json`):
+
+```json
+{
+  "type": "follow",
+  "summary": "UserA wants to follow UserB",
+  "state": "accepted",
+  "actor": {
+    "type": "author",
+    "id": "http://127.0.0.1:8000/api/authors/a-uuid",
+    "displayName": "UserA",
+    "...": "..."
+  },
+  "object": {
+    "type": "author",
+    "id": "http://127.0.0.1:8000/api/authors/b-uuid",
+    "displayName": "UserB",
+    "...": "..."
+  }
+}
+```
+
+### DELETE /api/authors/{AUTHOR_SERIAL}/followers/{FOREIGN_AUTHOR_FQID}
+
+- **When to use**: Reject a pending follow request, or remove an approved follower.
+- **Auth**: Must be authenticated as `{AUTHOR_SERIAL}`.
+
+#### Response
+
+- **Status**: `200 OK` with follow object (state=`rejected`) when denying a pending request.
+- **Status**: `204 No Content` when removing an approved follower.
+- **Status**: `404 Not Found` if no matching relationship exists.
+- **Status**: `403 Forbidden` if not the owner.
+
+---
+
+### GET /api/authors/{AUTHOR_SERIAL}/follow_requests
+
+- **When to use**: List incoming follow requests (pending only) that `{AUTHOR_SERIAL}` needs to approve or deny.
+- **Auth**: Must be authenticated as `{AUTHOR_SERIAL}` (owner-only).
+
+#### Response
+
+- **Status**: `200 OK`, or `403 Forbidden` if not the owner.
+- **Body** (`application/json`):
+
+```json
+{
+  "type": "follow_requests",
+  "items": [
+    {
+      "type": "follow",
+      "summary": "UserA wants to follow UserB",
+      "state": "requesting",
+      "actor": {
+        "type": "author",
+        "id": "http://127.0.0.1:8000/api/authors/a-uuid",
+        "displayName": "UserA",
+        "...": "..."
+      },
+      "object": {
+        "type": "author",
+        "id": "http://127.0.0.1:8000/api/authors/b-uuid",
+        "displayName": "UserB",
+        "...": "..."
+      }
+    }
+  ]
+}
+```
+
+---
+
+### GET /api/authors/{AUTHOR_SERIAL}/friends
+
+- **When to use**: List mutual friends (both authors follow each other with approved status).
+- **Auth**: Must be authenticated as `{AUTHOR_SERIAL}` (owner-only).
+
+#### Response
+
+- **Status**: `200 OK`, or `403 Forbidden` if not the owner.
+- **Body** (`application/json`):
+
+```json
+{
+  "type": "friends",
+  "friends": [
+    {
+      "type": "author",
+      "id": "http://127.0.0.1:8000/api/authors/b-uuid",
+      "host": "http://127.0.0.1:8000/api/",
+      "displayName": "UserB",
+      "web": "http://127.0.0.1:8000/authors/b-uuid",
+      "github": "",
+      "profileImage": ""
+    }
+  ]
+}
+```
+
+### GET /api/authors/{AUTHOR_SERIAL}/friends/{FOREIGN_AUTHOR_FQID}
+
+- **When to use**: Check whether a specific author is a mutual friend.
+- **Auth**: Must be authenticated as `{AUTHOR_SERIAL}`.
+
+#### Response
+
+- **Status**: `200 OK` with the friend's author object if they are mutual friends, or `404 Not Found` if not friends.
+
+---
+
 ## Comments API
 
 Comments are attached to an entry. Each comment has an author, body, content type (`text/plain` or `text/markdown`), and published time.

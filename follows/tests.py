@@ -190,3 +190,58 @@ class FollowEndpointsTests(TestCase):
         url = f"/api/authors/{self.a_uuid}/following/{self.enc_a_fqid}"
         resp = self.client.put(url, content_type="application/json")
         self.assertEqual(resp.status_code, 400, resp.content)
+
+
+class FollowEdgeCaseTests(TestCase):
+    """Edge-case tests for follow operations on non-existent users."""
+
+    def setUp(self):
+        self.client = Client()
+
+        self.author_a = Author.objects.create(
+            display_name="UserA",
+            fqid="http://127.0.0.1:8000/api/authors/a",
+            host="http://127.0.0.1:8000/api/",
+            web="http://127.0.0.1:8000/authors/a",
+            is_local=True,
+        )
+        self.user_a = User.objects.create_user(username="UserA", password="passA12345")
+        AuthorAccount.objects.create(user=self.user_a, author=self.author_a)
+
+        self.a_uuid = str(self.author_a.uuid)
+        self.nonexistent_fqid = enc("http://127.0.0.1:8000/api/authors/does-not-exist")
+
+    def test_follow_nonexistent_user_returns_404(self):
+        """PUT following/{nonexistent} should return 404."""
+        self.client.login(username="UserA", password="passA12345")
+        url = f"/api/authors/{self.a_uuid}/following/{self.nonexistent_fqid}"
+        resp = self.client.put(url, content_type="application/json")
+        self.assertEqual(resp.status_code, 404, resp.content)
+
+    def test_unfollow_nonexistent_user_returns_404(self):
+        """DELETE following/{nonexistent} should return 404."""
+        self.client.login(username="UserA", password="passA12345")
+        url = f"/api/authors/{self.a_uuid}/following/{self.nonexistent_fqid}"
+        resp = self.client.delete(url)
+        self.assertEqual(resp.status_code, 404, resp.content)
+
+    def test_check_following_nonexistent_user_returns_404(self):
+        """GET following/{nonexistent} should return 404."""
+        self.client.login(username="UserA", password="passA12345")
+        url = f"/api/authors/{self.a_uuid}/following/{self.nonexistent_fqid}"
+        resp = self.client.get(url)
+        self.assertEqual(resp.status_code, 404, resp.content)
+
+    def test_accept_follow_from_nonexistent_user_returns_404(self):
+        """PUT followers/{nonexistent} should return 404."""
+        self.client.login(username="UserA", password="passA12345")
+        url = f"/api/authors/{self.a_uuid}/followers/{self.nonexistent_fqid}"
+        resp = self.client.put(url, content_type="application/json")
+        self.assertEqual(resp.status_code, 404, resp.content)
+
+    def test_deny_follow_from_nonexistent_user_returns_404(self):
+        """DELETE followers/{nonexistent} should return 404."""
+        self.client.login(username="UserA", password="passA12345")
+        url = f"/api/authors/{self.a_uuid}/followers/{self.nonexistent_fqid}"
+        resp = self.client.delete(url)
+        self.assertEqual(resp.status_code, 404, resp.content)
