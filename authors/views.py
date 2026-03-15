@@ -83,19 +83,10 @@ def _get_profile_entries(request: HttpRequest, author: Author) -> list:
     if hasattr(entry_model, "is_deleted"):
         queryset = queryset.filter(is_deleted=False)
 
-    # rules:
-    # - if viewer is the profile owner: show PUBLIC + FRIENDS + UNLISTED
-    # - else if viewer is a friend: show PUBLIC + FRIENDS
-    # - else: PUBLIC only
     if hasattr(entry_model, "visibility"):
-        if viewer and viewer.uuid == author.uuid:
-            queryset = queryset.exclude(visibility=entry_model.VISIBILITY_DELETED)
-        elif viewer and _are_friends(viewer, author):
-            queryset = queryset.filter(
-                visibility__in=[entry_model.VISIBILITY_PUBLIC, entry_model.VISIBILITY_FRIENDS]
-            )
-        else:
-            queryset = queryset.filter(visibility=entry_model.VISIBILITY_PUBLIC)
+        from entries.views import get_profile_entry_visibilities
+        visibilities = get_profile_entry_visibilities(viewer, author)
+        queryset = queryset.filter(visibility__in=visibilities)
 
     if hasattr(entry_model, "published"):
         queryset = queryset.order_by("-published")
