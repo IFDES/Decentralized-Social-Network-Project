@@ -191,3 +191,19 @@ class SignupTests(TestCase):
         )
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "already exists")
+
+
+class LogoutTests(TestCase):
+    def setUp(self):
+        self.client = Client()
+        self.user = User.objects.create_user(username="testuser", password="pass12345")
+        self.client.login(username="testuser", password="pass12345")
+
+    def test_logout_redirects_to_login_page(self):
+        response = self.client.post("/accounts/logout/")
+        self.assertRedirects(response, "/")
+
+    def test_logout_clears_session(self):
+        self.client.post("/accounts/logout/")
+        response = self.client.get("/stream/")
+        self.assertEqual(response.status_code, 302)  # redirected to login
