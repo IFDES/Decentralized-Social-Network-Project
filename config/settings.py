@@ -126,8 +126,8 @@ AUTH_PASSWORD_VALIDATORS = [
     },
 ]
 
-LOGIN_URL = "/accounts/login/"
-LOGIN_REDIRECT_URL = "/follows/ui"
+LOGIN_URL = "/"
+LOGIN_REDIRECT_URL = "/stream"
 
 # Internationalization
 # https://docs.djangoproject.com/en/5.2/topics/i18n/

@@ -35,10 +35,13 @@
     <pre>{{ entry.content }}</pre>
   {% endif %}
 
+  {% if current_author.uuid == author.uuid %}
   <p>
     <a href="{% url 'entries:entry-edit' author.uuid entry.uuid %}">Edit</a> |
     <a href="{% url 'entries:entry-delete' author.uuid entry.uuid %}">Delete</a>
   </p>
+  {% endif %}
+
 
   <h3>Likes ({{ like_count }})</h3>
   {% if current_author %}
