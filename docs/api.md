@@ -851,6 +851,125 @@ HTML endpoints:
 
 ## User Registration (Signup with Admin Approval)
 
+### GET /api/authors
+
+- **Purpose**: Retrieve the paginated list of non-deleted author profiles known by this node.
+- **Auth**: None required.
+- **Query params**:
+  - `page` (optional, default `1`)
+  - `size` (optional, default `10`)
+
+#### Example request
+
+```http
+GET /api/authors?page=1&size=2
+```
+
+#### Example response
+
+```json
+{
+  "type": "authors",
+  "page_number": 1,
+  "size": 2,
+  "count": 2,
+  "authors": [
+    {
+      "type": "author",
+      "id": "http://127.0.0.1:8000/api/authors/11111111-1111-1111-1111-111111111111",
+      "host": "http://127.0.0.1:8000/api/",
+      "web": "http://127.0.0.1:8000/authors/11111111-1111-1111-1111-111111111111",
+      "displayName": "Alice",
+      "github": "https://github.com/alice",
+      "profileImage": "https://example.com/alice.png",
+      "description": "About Alice"
+    },
+    {
+      "type": "author",
+      "id": "http://127.0.0.1:8000/api/authors/33333333-3333-3333-3333-333333333333",
+      "host": "http://127.0.0.1:8000/api/",
+      "web": "http://127.0.0.1:8000/authors/33333333-3333-3333-3333-333333333333",
+      "displayName": "Bob",
+      "github": "https://github.com/bob",
+      "profileImage": "https://example.com/bob.png",
+      "description": "About Bob"
+    }
+  ]
+}
+```
+
+#### Status codes
+
+| Status | Meaning |
+|--------|---------|
+| `200 OK` | Author list returned successfully |
+
+---
+
+### POST /api/authors
+
+- **Purpose**: Create a new local user registration through the API, mirroring the browser signup flow.
+- **Auth**: None required.
+- **Body** (`application/json`):
+  - `username` (string, required)
+  - `displayName` or `display_name` (string, required)
+  - `password1` (string, required)
+  - `password2` (string, required, must match `password1`)
+  - `github` (string, optional)
+  - `profileImage` or `profile_image` (string, optional)
+  - `description` (string, optional)
+
+#### Behaviour
+
+1. Validates the signup payload.
+2. Creates a Django `User` with `is_active=False`.
+3. Creates a linked local `Author`.
+4. Returns the new author object and indicates that admin approval is still required.
+
+#### Example request
+
+```http
+POST /api/authors
+Content-Type: application/json
+
+{
+  "username": "apiuser",
+  "displayName": "API User",
+  "password1": "strongPass99",
+  "password2": "strongPass99",
+  "github": "https://github.com/apiuser",
+  "profileImage": "https://example.com/apiuser.png",
+  "description": "Created through the API"
+}
+```
+
+#### Example response
+
+```json
+{
+  "pendingApproval": true,
+  "author": {
+    "type": "author",
+    "id": "http://127.0.0.1:8000/api/authors/11111111-1111-1111-1111-111111111111",
+    "host": "http://127.0.0.1:8000/api/",
+    "web": "http://127.0.0.1:8000/authors/11111111-1111-1111-1111-111111111111",
+    "displayName": "API User",
+    "github": "https://github.com/apiuser",
+    "profileImage": "https://example.com/apiuser.png",
+    "description": "Created through the API"
+  }
+}
+```
+
+#### Status codes
+
+| Status | Meaning |
+|--------|---------|
+| `201 Created` | Pending account and author created successfully |
+| `400 Bad Request` | Invalid JSON or validation errors |
+
+---
+
 ### GET /accounts/signup/
 
 - **Purpose**: Render the signup form for new users.
