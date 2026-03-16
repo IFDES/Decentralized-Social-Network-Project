@@ -1,125 +1,18 @@
 {% extends "base.html" %}
-{% load markdown_extras %}
 
 {% block title %}Stream{% endblock %}
 
 {% block content %}
   <h1>Stream</h1>
-  <p>Stream: public entries for everyone; when logged in, you also see unlisted from authors you follow and friends-only from friends.</p>
-
-<!-- Clickable images assisted by chatgpt on 14 March 2026 21:40 with prompt: "Can images be clickable so that it pops up in an elevated layer" -->
-
-  <style>
-    .entry-markdown { max-width: 100%; }
-    .entry-markdown p { white-space: normal; }
-    .stream-entry {
-      margin-bottom: 2em;
-      padding-bottom: 1em;
-      border-bottom: 1px solid #ddd;
-    }
-    .entry-image img, .entry-images img, .entry-markdown img {
-      max-width: min(480px, 100%);
-      max-height: 360px;
-      width: auto;
-      height: auto;
-      object-fit: contain;
-      cursor: pointer;
-    }
-    .image-lightbox {
-      display: none;
-      position: fixed;
-      inset: 0;
-      background: rgba(0,0,0,0.9);
-      z-index: 9999;
-      align-items: center;
-      justify-content: center;
-      cursor: pointer;
-    }
-    .image-lightbox.is-open { display: flex; }
-    .image-lightbox img {
-      max-width: 95vw;
-      max-height: 95vh;
-      width: auto;
-      height: auto;
-      object-fit: contain;
-      cursor: default;
-      pointer-events: auto;
-    }
-    .image-lightbox-close {
-      position: absolute;
-      top: 1rem;
-      right: 1rem;
-      color: #fff;
-      font-size: 2rem;
-      line-height: 1;
-      cursor: pointer;
-      pointer-events: auto;
-      padding: 0.25rem;
-    }
-  </style>
 
   {% if entries %}
-    <ul style="list-style: none; padding-left: 0;">
-      {% for entry in entries %}
-        <li class="stream-entry">
-          <h2>{{ entry.title|default:"Untitled entry" }}</h2>
-
-          <p><strong>Author:</strong> <a href="{% url 'authors:profile' entry.author.uuid %}">{{ entry.author.display_name }}</a></p>
-          <p><strong>Content Type:</strong> {{ entry.content_type }}</p>
-          <p><strong>Visibility:</strong> {{ entry.visibility }}</p>
-
-          {% if entry.image_urls %}
-            {% if entry.content %}
-              {% if entry.content_type == "text/markdown" %}
-                <div class="entry-markdown">{{ entry.content|render_markdown|safe }}</div>
-              {% else %}
-                <pre>{{ entry.content }}</pre>
-              {% endif %}
-            {% endif %}
-            <div class="entry-images">
-              {% for url in entry.image_urls %}
-                <figure class="entry-image">
-                  <img src="{{ url }}" alt="{{ entry.title|default:'Image' }}" />
-                </figure>
-              {% endfor %}
-            </div>
-          {% elif entry.content_type == "image" or entry.content_type == "image/png" or entry.content_type == "image/jpeg" %}
-            {% if entry.content %}
-              <figure class="entry-image">
-                <img src="{{ entry.content }}" alt="{{ entry.title|default:'Image' }}" />
-              </figure>
-            {% endif %}
-          {% else %}
-            {% if entry.content %}
-              {% if entry.content_type == "text/markdown" %}
-                <div class="entry-markdown">{{ entry.content|render_markdown|safe }}</div>
-              {% else %}
-                <pre>{{ entry.content }}</pre>
-              {% endif %}
-            {% endif %}
-          {% endif %}
-
-          <p><strong>Published:</strong> {{ entry.published }}</p>
-          <p><strong>Updated:</strong> {{ entry.updated_at }}</p>
-
-          <p>
-            {{ entry.like_count }} like{{ entry.like_count|pluralize }}
-            ·
-            {{ entry.comment_count }} comment{{ entry.comment_count|pluralize }}
-          </p>
-
-          <p>
-            <a href="{% url 'entries:entry-detail' entry.author.uuid entry.uuid %}">
-              View entry
-            </a>
-          </p>
-        </li>
-      {% endfor %}
-    </ul>
+    {% for entry in entries %}
+      {% include "entries/entry.html" with author=entry.author like_count=entry.like_count current_user_has_liked=entry.current_user_has_liked %}
+    {% endfor %}
   {% else %}
     <p>No stream entries available.</p>
   {% endif %}
-<!-- Clickable images assisted by chatgpt on 14 March 2026 21:40 with prompt: "Can images be clickable so that it pops up in an elevated layer" -->
+
   <div id="image-lightbox" class="image-lightbox" aria-hidden="true">
     <span class="image-lightbox-close" title="Close">&times;</span>
     <img src="" alt="" />

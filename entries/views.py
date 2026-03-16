@@ -289,6 +289,7 @@ def _stream_entries_queryset(request: HttpRequest | None = None):
 @login_required
 @require_http_methods(["GET"])
 def stream_page(request: HttpRequest) -> HttpResponse:
+    current_author = _get_current_author(request)
     entries = list(_stream_entries_queryset(request))
     entry_ids = [e.uuid for e in entries]
     like_counts = dict(
@@ -303,14 +304,25 @@ def stream_page(request: HttpRequest) -> HttpResponse:
         .annotate(n=Count("uuid"))
         .values_list("entry_id", "n")
     )
+    if current_author:
+        liked_ids = set(
+            EntryLike.objects.filter(author=current_author, entry_id__in=entry_ids)
+            .values_list("entry_id", flat=True)
+        )
+    else:
+        liked_ids = set()
     for e in entries:
         e.like_count = like_counts.get(e.uuid, 0)
         e.comment_count = comment_counts.get(e.uuid, 0)
+        e.current_user_has_liked = e.uuid in liked_ids
+    authors = list(Author.objects.filter(is_deleted=False).order_by("display_name"))
     return render(
         request,
         "entries/stream.html",
         {
             "entries": entries,
+            "current_author": current_author,
+            "authors": authors,
         },
     )
 
