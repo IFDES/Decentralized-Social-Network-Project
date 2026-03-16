@@ -11,5 +11,7 @@ urlpatterns = [
     path("authors/<uuid:author_id>/edit/", views.edit_author_profile_page),
     path("api/authors/<uuid:author_id>", views.author_profile_api, name="profile_api"),
     path("api/authors/<uuid:author_id>/", views.author_profile_api),
+    path("api/authors/<uuid:author_id>/github", views.github_activity_api, name="github_activity_api"),
+    path("api/authors/<uuid:author_id>/github/", views.github_activity_api),
     path("me", views.my_profile_redirect, name="my_profile"),
 ]

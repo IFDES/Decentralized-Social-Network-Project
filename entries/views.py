@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from uuid import UUID
 
 from django.conf import settings
+from django.contrib.auth.decorators import login_required
 from django.db.models import Count, Q
 from django.http import (
     HttpRequest,
@@ -38,23 +39,33 @@ def _hosted_image_canonical_url(request: HttpRequest, hosted: HostedImage) -> st
     return request.build_absolute_uri(path)
 
 
-def _build_image_urls_from_request(request: HttpRequest, author) -> list:
-    """Build ordered list of image URLs from uploaded files and pasted URL text."""
-    urls = []
+def _build_image_urls_from_request(
+    request: HttpRequest,
+    author: Author,
+    visibility: str,
+    entry: Entry | None = None,
+) -> None:
     allowed = {"image/png", "image/jpeg", "image/gif", "image/webp"}
+
     for f in request.FILES.getlist("image_files") or []:
         if f.content_type in allowed:
             try:
-                hosted = HostedImage.objects.create(uploaded_by=author, file=f)
-                urls.append(_hosted_image_canonical_url(request, hosted))
+                HostedImage.objects.create(
+                    uploaded_by=author,
+                    file=f,
+                    visibility=visibility,
+                    entry=entry,
+                )
             except Exception:
                 pass
+
     text = (request.POST.get("image_urls_text") or "").strip()
     for part in text.replace(",", "\n").splitlines():
         part = part.strip()
         if part and (part.startswith("http://") or part.startswith("https://")):
-            urls.append(part)
-    return urls
+            # For external URLs, we don't create HostedImage; clients can embed
+            # them directly in markdown content.
+            continue
 
 
 # This file is assisted by CoPilot on 27 Feb 2026 02:10 with the prompt
@@ -72,6 +83,51 @@ def _get_current_author(request: HttpRequest):
     except AuthorAccount.DoesNotExist:
         return None
 
+def _is_node_admin(request: HttpRequest) -> bool:
+    user = getattr(request, "user", None)
+    return bool(
+        user
+        and getattr(user, "is_authenticated", False)
+        and (
+            getattr(user, "is_staff", False)
+            or getattr(user, "is_superuser", False)
+        )
+    )
+
+
+def _entry_is_deleted(entry: Entry) -> bool:
+    return entry.is_deleted or entry.visibility == Entry.VISIBILITY_DELETED
+
+
+def _can_view_entry_detail(
+    request: HttpRequest,
+    entry: Entry,
+    viewer: Author | None,
+) -> bool:
+    """
+    Access rules for viewing a single entry by direct URL / API detail endpoint.
+    """
+    is_admin = _is_node_admin(request)
+
+    if _entry_is_deleted(entry):
+        return is_admin
+
+    if entry.visibility in (
+        Entry.VISIBILITY_PUBLIC,
+        Entry.VISIBILITY_UNLISTED,
+    ):
+        return True
+
+    if is_admin:
+        return True
+
+    if viewer and viewer.uuid == entry.author_id:
+        return True
+
+    if entry.visibility == Entry.VISIBILITY_FRIENDS:
+        return viewer is not None and FollowRelationship.are_friends(viewer, entry.author)
+
+    return False
 
 def _build_entry_id(author: Author, entry: Entry) -> str:
     if entry.fqid:
@@ -87,7 +143,7 @@ def _build_entry_web(author: Author, entry: Entry) -> str:
     return f"{base}/authors/{author.uuid}/entries/{entry.uuid}"
 
 
-def _entry_to_json(entry: Entry) -> dict:
+def _entry_to_json(request: HttpRequest, entry: Entry) -> dict:
     author = entry.author
 
     entry_id = _build_entry_id(author, entry)
@@ -113,6 +169,11 @@ def _entry_to_json(entry: Entry) -> dict:
     likes_page = list(likes_queryset[:5])
     likes_payload = likes_list_json(entry, 1, 5, likes_count, likes_page)
 
+    image_urls = [
+        _hosted_image_canonical_url(request, hosted)
+        for hosted in entry.hosted_images.all()
+    ]
+
     return {
         "type": "entry",
         "title": entry.title,
@@ -135,14 +196,17 @@ def _entry_to_json(entry: Entry) -> dict:
         "published": entry.published.astimezone(timezone.utc).isoformat(),
         "updated_at": entry.updated_at.astimezone(timezone.utc).isoformat(),
         "visibility": entry.visibility,
-        "image_urls": getattr(entry, "image_urls", None) or [],
+        "image_urls": image_urls,
     }
 
 
 def _can_view_entry(entry: Entry, viewer: Author | None) -> bool:
-    if not entry.is_visible:
+    """
+    Legacy helper for non-detail checks. Deleted entries are never visible here.
+    """
+    if _entry_is_deleted(entry):
         return False
-    if entry.visibility == Entry.VISIBILITY_PUBLIC or entry.visibility == Entry.VISIBILITY_UNLISTED:
+    if entry.visibility in (Entry.VISIBILITY_PUBLIC, Entry.VISIBILITY_UNLISTED):
         return True
     if entry.visibility == Entry.VISIBILITY_FRIENDS:
         if not viewer:
@@ -222,6 +286,7 @@ def _stream_entries_queryset(request: HttpRequest | None = None):
 # ---------------------------------------------------------------------------
 
 
+@login_required
 @require_http_methods(["GET"])
 def stream_page(request: HttpRequest) -> HttpResponse:
     entries = list(_stream_entries_queryset(request))
@@ -262,8 +327,15 @@ def entry_create_me_page(request: HttpRequest) -> HttpResponse:
 @require_http_methods(["GET"])
 def author_entries_page(request: HttpRequest, author_id: UUID) -> HttpResponse:
     author = get_object_or_404(Author, pk=author_id, is_deleted=False)
+    viewer = _get_current_author(request)
+    allowed_visibilities = get_profile_entry_visibilities(viewer, author)
+
     entries = (
-        Entry.objects.filter(author=author, is_deleted=False)
+        Entry.objects.filter(
+            author=author,
+            is_deleted=False,
+            visibility__in=allowed_visibilities,
+        )
         .exclude(visibility=Entry.VISIBILITY_DELETED)
         .order_by("-published")
     )
@@ -286,13 +358,12 @@ def entry_detail_page(
         Entry,
         pk=entry_id,
         author=author,
-        is_deleted=False,
     )
-    
+
     current_author = _get_current_author(request)
-    if not _can_view_entry(entry, current_author):
+    if not _can_view_entry_detail(request, entry, current_author):
         return HttpResponseForbidden("You do not have permission to view this entry.")
-    
+        
     comments = list(
         Comment.objects.filter(entry=entry)
         .select_related("author")
@@ -336,6 +407,10 @@ def entry_detail_page(
             "current_author": current_author,
             "current_user_has_liked": current_user_has_liked,
             "authors": authors,
+            "shareable_link": entry.web if entry.visibility in (
+                Entry.VISIBILITY_PUBLIC,
+                Entry.VISIBILITY_UNLISTED,
+            ) else "",
         },
     )
 
@@ -346,6 +421,10 @@ def entry_comment_create_page(
 ) -> HttpResponse:
     author = get_object_or_404(Author, pk=author_id, is_deleted=False)
     entry = get_object_or_404(Entry, pk=entry_id, author=author, is_deleted=False)
+    viewer = _get_current_author(request)
+    if not _can_view_entry_detail(request, entry, viewer):
+        return HttpResponseForbidden("You do not have permission to access this entry.")
+        
     comment_author = _get_current_author(request)
     if not comment_author:
         author_pk = request.POST.get("author_id")
@@ -377,6 +456,10 @@ def entry_like_page(
 ) -> HttpResponse:
     author = get_object_or_404(Author, pk=author_id, is_deleted=False)
     entry = get_object_or_404(Entry, pk=entry_id, author=author, is_deleted=False)
+    viewer = _get_current_author(request)
+    if not _can_view_entry_detail(request, entry, viewer):
+        return HttpResponseForbidden("You do not have permission to access this entry.")
+        
     like_author = _get_current_author(request)
     if not like_author:
         author_pk = request.POST.get("author_id")
@@ -397,6 +480,10 @@ def entry_unlike_page(
 ) -> HttpResponse:
     author = get_object_or_404(Author, pk=author_id, is_deleted=False)
     entry = get_object_or_404(Entry, pk=entry_id, author=author, is_deleted=False)
+    viewer = _get_current_author(request)
+    if not _can_view_entry_detail(request, entry, viewer):
+        return HttpResponseForbidden("You do not have permission to access this entry.")
+        
     like_author = _get_current_author(request)
     if not like_author:
         author_pk = request.POST.get("author_id")
@@ -417,6 +504,10 @@ def comment_like_page(
 ) -> HttpResponse:
     author = get_object_or_404(Author, pk=author_id, is_deleted=False)
     entry = get_object_or_404(Entry, pk=entry_id, author=author, is_deleted=False)
+    viewer = _get_current_author(request)
+    if not _can_view_entry_detail(request, entry, viewer):
+        return HttpResponseForbidden("You do not have permission to access this entry.")
+        
     comment = get_object_or_404(Comment, pk=comment_id, entry=entry)
     like_author = _get_current_author(request)
     if not like_author:
@@ -438,6 +529,10 @@ def comment_unlike_page(
 ) -> HttpResponse:
     author = get_object_or_404(Author, pk=author_id, is_deleted=False)
     entry = get_object_or_404(Entry, pk=entry_id, author=author, is_deleted=False)
+    viewer = _get_current_author(request)
+    if not _can_view_entry_detail(request, entry, viewer):
+        return HttpResponseForbidden("You do not have permission to access this entry.")
+        
     comment = get_object_or_404(Comment, pk=comment_id, entry=entry)
     like_author = _get_current_author(request)
     if not like_author:
@@ -464,8 +559,15 @@ def entry_create_page(request: HttpRequest, author_id: UUID) -> HttpResponse:
         if form.is_valid():
             entry: Entry = form.save(commit=False)
             entry.author = author
-            entry.image_urls = _build_image_urls_from_request(request, author)
             entry.save()
+
+            _build_image_urls_from_request(
+                request,
+                author,
+                visibility=entry.visibility,
+                entry=entry,
+            )
+            entry.save(update_fields=["updated_at"])
             return redirect("entries:entry-detail", author_id=author.uuid, entry_id=entry.uuid)
     else:
         form = EntryForm()
@@ -500,13 +602,23 @@ def entry_edit_page(
         form = EntryForm(request.POST, request.FILES, instance=entry)
         if form.is_valid():
             entry = form.save(commit=False)
-            entry.image_urls = _build_image_urls_from_request(request, author)
             entry.save()
+
+            _build_image_urls_from_request(
+                request,
+                author,
+                visibility=entry.visibility,
+                entry=entry,
+            )
+            entry.save(update_fields=["updated_at"])
             return redirect("entries:entry-detail", author_id=author.uuid, entry_id=entry.uuid)
     else:
         form = EntryForm(instance=entry)
 
-    existing_image_urls_text = "\n".join(entry.image_urls or [])
+    existing_image_urls_text = "\n".join(
+        _hosted_image_canonical_url(request, hosted)
+        for hosted in entry.hosted_images.all()
+    )
 
     return render(
         request,
@@ -566,23 +678,55 @@ def entry_delete_page(
 @require_http_methods(["GET"])
 def serve_hosted_image(request: HttpRequest, image_id: UUID) -> HttpResponse:
     """
-    Serve a hosted image by UUID.
-    Node admins host images; this URL is what users paste into CommonMark.
+    Serve a hosted image by UUID, enforcing the same broad visibility rules
+    as entries when possible.
     """
     hosted = get_object_or_404(HostedImage, pk=image_id)
+    viewer = _get_current_author(request)
+
+    # If the image is attached to an entry, let the entry rules decide.
+    if hosted.entry is not None:
+        if not _can_view_entry_detail(request, hosted.entry, viewer):
+            return HttpResponseForbidden("You do not have permission to view this image.")
+    else:
+        # Fallback to image's own visibility if it is not linked to an entry.
+        is_admin = _is_node_admin(request)
+
+        if hosted.visibility == Entry.VISIBILITY_DELETED:
+            if not is_admin:
+                return HttpResponseForbidden("You do not have permission to view this image.")
+
+        elif hosted.visibility == Entry.VISIBILITY_FRIENDS:
+            if not viewer:
+                return HttpResponseForbidden("You do not have permission to view this image.")
+            if (
+                viewer.uuid != hosted.uploaded_by_id
+                and not is_admin
+                and not FollowRelationship.are_friends(viewer, hosted.uploaded_by)
+            ):
+                return HttpResponseForbidden("You do not have permission to view this image.")
+
+        # PUBLIC and UNLISTED are allowed by direct link
+
     if not hosted.file:
         return HttpResponseBadRequest("Image file missing.")
+
     try:
         f = hosted.file.open("rb")
     except (FileNotFoundError, OSError):
         return HttpResponseBadRequest("Image file not found on disk.")
+
     content_type, _ = mimetypes.guess_type(hosted.file.name)
     if not content_type:
         content_type = "application/octet-stream"
-    response = FileResponse(f, as_attachment=False, filename=hosted.file.name.split("/")[-1])
+
+    response = FileResponse(
+        f,
+        as_attachment=False,
+        filename=hosted.file.name.split("/")[-1],
+    )
     response["Content-Type"] = content_type
     return response
-
 
 @require_http_methods(["GET", "POST"])
 def image_upload_page(request: HttpRequest, author_id: UUID) -> HttpResponse:
@@ -605,7 +749,11 @@ def image_upload_page(request: HttpRequest, author_id: UUID) -> HttpResponse:
                 {"author": author, "error": f"Unsupported type. Use: {', '.join(sorted(allowed))}"},
             )
         try:
-            hosted = HostedImage.objects.create(uploaded_by=author, file=file)
+            hosted = HostedImage.objects.create(
+                uploaded_by=author,
+                file=file,
+                visibility=Entry.VISIBILITY_PUBLIC,
+            )
             url = _hosted_image_canonical_url(request, hosted)
             return render(
                 request,
@@ -636,7 +784,11 @@ def image_upload_api(request: HttpRequest, author_id: UUID) -> HttpResponse:
             f"Unsupported content type. Allowed: {', '.join(sorted(allowed))}"
         )
     try:
-        hosted = HostedImage.objects.create(uploaded_by=author, file=file)
+        hosted = HostedImage.objects.create(
+            uploaded_by=author,
+            file=file,
+            visibility=Entry.VISIBILITY_PUBLIC,
+        )
     except Exception as e:
         return HttpResponseBadRequest(str(e))
     url = _hosted_image_canonical_url(request, hosted)
@@ -658,7 +810,7 @@ def stream_api(request: HttpRequest) -> HttpResponse:
             "page_number": page_number,
             "size": size,
             "count": count,
-            "src": [_entry_to_json(entry) for entry in page_items],
+            "src": [_entry_to_json(request, entry) for entry in page_items],
         }
     )
 
@@ -700,23 +852,19 @@ def author_entries_api(request: HttpRequest, author_id: UUID) -> HttpResponse:
     author = get_object_or_404(Author, pk=author_id, is_deleted=False)
 
     if request.method == "GET":
+        viewer = _get_current_author(request)
+        allowed_visibilities = get_profile_entry_visibilities(viewer, author)
+
         queryset = (
-            Entry.objects.filter(author=author, is_deleted=False)
+            Entry.objects.filter(
+                author=author,
+                is_deleted=False,
+                visibility__in=allowed_visibilities,
+            )
             .exclude(visibility=Entry.VISIBILITY_DELETED)
             .order_by("-published")
         )
-        viewer = _get_current_author(request)
-        if viewer and viewer.uuid == author.uuid:
-            pass  # owner sees all
-        elif viewer and FollowRelationship.are_friends(viewer, author):
-            queryset = queryset.filter(
-                visibility__in=[
-                    Entry.VISIBILITY_PUBLIC,
-                    Entry.VISIBILITY_FRIENDS,
-                ]
-            )
-        else:
-            queryset = queryset.filter(visibility=Entry.VISIBILITY_PUBLIC)
+
         page_number, size, count, page_items = _paginate_queryset(request, queryset)
         return JsonResponse(
             {
@@ -724,7 +872,7 @@ def author_entries_api(request: HttpRequest, author_id: UUID) -> HttpResponse:
                 "page_number": page_number,
                 "size": size,
                 "count": count,
-                "src": [_entry_to_json(entry) for entry in page_items],
+                "src": [_entry_to_json(request, entry) for entry in page_items],
             }
         )
 
@@ -759,7 +907,7 @@ def author_entries_api(request: HttpRequest, author_id: UUID) -> HttpResponse:
         visibility=visibility,
     )
 
-    return JsonResponse(_entry_to_json(entry), status=201)
+    return JsonResponse(_entry_to_json(request, entry), status=201)
 
 
 @csrf_exempt
@@ -773,12 +921,10 @@ def entry_detail_api(
     entry = get_object_or_404(Entry, pk=entry_id, author=author)
 
     if request.method == "GET":
-        if not entry.is_visible:
-            return HttpResponseBadRequest("Entry has been deleted.")
         viewer = _get_current_author(request)
-        if not _can_view_entry(entry, viewer):
+        if not _can_view_entry_detail(request, entry, viewer):
             return HttpResponseForbidden("You do not have permission to view this entry.")
-        return JsonResponse(_entry_to_json(entry))
+        return JsonResponse(_entry_to_json(request, entry))
 
     if not user_matches_author_uuid(request, author.uuid):
         return HttpResponseForbidden("Not authorized for this author.")
@@ -811,7 +957,7 @@ def entry_detail_api(
         entry.content_type = content_type
         entry.visibility = visibility
         entry.save()
-        return JsonResponse(_entry_to_json(entry))
+        return JsonResponse(_entry_to_json(request, entry))
 
     # DELETE
     if entry.is_deleted:

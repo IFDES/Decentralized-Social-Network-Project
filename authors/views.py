@@ -1,4 +1,5 @@
 import json
+import logging
 from uuid import UUID
 from urllib.parse import urljoin
 
@@ -15,7 +16,10 @@ from follows.models import FollowRelationship
 from django.contrib.auth.models import User
 
 from .forms import AuthorProfileForm, SignupForm
+from .github_activity import sync_github_activity, fetch_github_events, _event_to_summary
 from .models import Author, AuthorAccount
+
+logger = logging.getLogger(__name__)
 
 
 def _author_api_id(request: HttpRequest, author: Author) -> str:
@@ -108,6 +112,22 @@ def author_profile_page(request: HttpRequest, author_id: UUID):
     is_owner = bool(viewer and viewer.uuid == author.uuid)
     is_friend = bool(viewer and viewer.uuid != author.uuid and _are_friends(viewer, author))
 
+    # Fetch GitHub activity entries (already synced ones from DB)
+    github_entries = []
+    if author.github:
+        try:
+            from entries.models import Entry
+            github_entries = list(
+                Entry.objects.filter(
+                    author=author,
+                    external_id__startswith="github-",
+                    is_deleted=False,
+                )
+                .order_by("-published")[:10]
+            )
+        except Exception:
+            pass
+
     return render(
         request,
         "authors/profile.html",
@@ -116,6 +136,7 @@ def author_profile_page(request: HttpRequest, author_id: UUID):
             "entries": entries,
             "is_owner": is_owner,
             "is_friend": is_friend,
+            "github_entries": github_entries,
         },
     )
 
@@ -183,6 +204,50 @@ def my_profile_redirect(request: HttpRequest):
     if not acct or not getattr(acct, "author", None):
         return redirect("/")
     return redirect("authors:profile", author_id=acct.author.uuid)
+
+
+@csrf_exempt
+@require_http_methods(["GET"])
+def github_activity_api(request: HttpRequest, author_id: UUID):
+    """
+    GET /api/authors/{author_id}/github
+    Fetches the author's public GitHub events, syncs new ones as Entry
+    objects, and returns the list of GitHub-sourced entries.
+    """
+    author = get_object_or_404(Author, pk=author_id, is_deleted=False)
+
+    if not author.github:
+        return JsonResponse({"type": "github_activity", "events": []}, status=200)
+
+    # Sync new events into the database
+    try:
+        new_entries = sync_github_activity(author)
+    except Exception as exc:
+        logger.warning("GitHub sync failed for %s: %s", author.uuid, exc)
+        new_entries = []
+
+    # Return all GitHub-sourced entries from the database
+    from entries.models import Entry
+    github_entries = list(
+        Entry.objects.filter(
+            author=author,
+            external_id__startswith="github-",
+            is_deleted=False,
+        )
+        .order_by("-published")[:30]
+    )
+
+    events_list = []
+    for entry in github_entries:
+        events_list.append({
+            "type": "github_event",
+            "title": entry.title,
+            "content": entry.content,
+            "published": entry.published.isoformat() if entry.published else "",
+            "id": entry.external_id or "",
+        })
+
+    return JsonResponse({"type": "github_activity", "events": events_list})
 
 
 @require_http_methods(["GET", "POST"])

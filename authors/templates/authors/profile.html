@@ -1,50 +1,292 @@
 {% extends "base.html" %}
 
-{% block title %}{{ author.display_name }}{% endblock %}
+{% block title %}{{ author.display_name }} – Profile{% endblock %}
 
 {% block content %}
-  <h1>{{ author.display_name }}</h1>
+<style>
+  .profile-header {
+    background: linear-gradient(135deg, #4361ee, #3a0ca3);
+    color: #fff;
+    padding: 2.5rem 1.5rem 2rem;
+    text-align: center;
+  }
+
+  .profile-header img {
+    width: 120px;
+    height: 120px;
+    border-radius: 50%;
+    object-fit: cover;
+    border: 4px solid rgba(255, 255, 255, 0.5);
+    margin-bottom: 1rem;
+  }
+
+  .profile-header h1 {
+    font-size: 1.75rem;
+    margin-bottom: 0.25rem;
+  }
+
+  .profile-header .desc {
+    opacity: 0.9;
+    max-width: 600px;
+    margin: 0 auto 0.5rem;
+  }
+
+  .profile-header .github-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    color: #fff;
+    text-decoration: none;
+    opacity: 0.85;
+    font-size: 0.9rem;
+  }
+
+  .profile-header .github-link:hover {
+    opacity: 1;
+    text-decoration: underline;
+  }
+
+  .edit-link {
+    display: inline-block;
+    margin-top: 0.75rem;
+    background: rgba(255, 255, 255, 0.2);
+    color: #fff;
+    padding: 0.4rem 1.2rem;
+    border-radius: 6px;
+    text-decoration: none;
+    font-size: 0.85rem;
+    border: 1px solid rgba(255, 255, 255, 0.4);
+    transition: background 0.2s;
+  }
+
+  .edit-link:hover {
+    background: rgba(255, 255, 255, 0.35);
+  }
+
+  .profile-container {
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 1.5rem;
+  }
+
+  .section-title {
+    font-size: 1.25rem;
+    font-weight: 600;
+    margin: 1.5rem 0 0.75rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 2px solid #4361ee;
+    color: #3a0ca3;
+  }
+
+  .hint {
+    color: #6c757d;
+    font-size: 0.85rem;
+    margin-bottom: 1rem;
+  }
+
+  .card {
+    background: #fff;
+    border: 1px solid #dee2e6;
+    border-radius: 10px;
+    padding: 1rem 1.25rem;
+    margin-bottom: 0.75rem;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+    transition: transform 0.15s;
+  }
+
+  .card:hover {
+    transform: translateY(-2px);
+  }
+
+  .card h3 {
+    margin-bottom: 0.25rem;
+    font-size: 1rem;
+  }
+
+  .card h3 a {
+    color: #4361ee;
+    text-decoration: none;
+  }
+
+  .card h3 a:hover {
+    text-decoration: underline;
+  }
+
+  .card .meta {
+    color: #6c757d;
+    font-size: 0.8rem;
+  }
+
+  .card .content-preview {
+    margin-top: 0.4rem;
+    font-size: 0.9rem;
+    white-space: pre-wrap;
+    overflow: hidden;
+    max-height: 4.8em;
+  }
+
+  .github-section .card {
+    border-left: 4px solid #238636;
+  }
+
+  .github-section .card h3 {
+    color: #238636;
+  }
+
+  .empty {
+    color: #6c757d;
+    font-style: italic;
+  }
+
+  .refresh-btn {
+    display: inline-block;
+    background: #238636;
+    color: #fff;
+    border: none;
+    padding: 0.4rem 1rem;
+    border-radius: 6px;
+    font-size: 0.85rem;
+    cursor: pointer;
+    text-decoration: none;
+    margin-bottom: 1rem;
+    transition: background 0.2s;
+  }
+
+  .refresh-btn:hover {
+    background: #2ea043;
+  }
+
+  .create-link {
+    display: inline-block;
+    background: #4361ee;
+    color: #fff;
+    padding: 0.4rem 1rem;
+    border-radius: 6px;
+    text-decoration: none;
+    font-size: 0.85rem;
+    margin-bottom: 1rem;
+    transition: background 0.2s;
+  }
+
+  .create-link:hover {
+    background: #3a0ca3;
+  }
+
+  #refresh-status {
+    display: inline-block;
+    margin-left: 0.75rem;
+    font-size: 0.85rem;
+    color: #6c757d;
+  }
+</style>
+
+<!-- Profile header -->
+<div class="profile-header">
   {% if author.profile_image %}
-    <img src="{{ author.profile_image }}" alt="{{ author.display_name }}" width="160">
+  <img src="{{ author.profile_image }}" alt="{{ author.display_name }}">
   {% endif %}
+  <h1>{{ author.display_name }}</h1>
+  <p class="desc">{{ author.description|default:"" }}</p>
+  {% if author.github %}
+  <a class="github-link" href="{{ author.github }}" target="_blank" rel="noopener">
+    &#128279; {{ author.github }}
+  </a>
+  {% endif %}
+  {% if is_owner %}
+  <br>
+  <a class="edit-link" href="{% url 'authors:edit_profile' author.uuid %}">Edit profile</a>
+  {% endif %}
+</div>
 
-  <p><strong>Description:</strong> {{ author.description|default:"-" }}</p>
-  <p><strong>GitHub:</strong>
-    {% if author.github %}
-      <a href="{{ author.github }}">{{ author.github }}</a>
-    {% else %}
-      -
+<div class="profile-container">
+  {% if author.github %}
+  <!-- GitHub Activity Section -->
+  <div class="github-section">
+    <h2 class="section-title">GitHub Activity</h2>
+    {% if is_owner %}
+    <button class="refresh-btn" id="refresh-github-btn" onclick="refreshGitHub()">
+      Refresh GitHub Activity
+    </button>
+    <span id="refresh-status"></span>
     {% endif %}
-  </p>
-  {% if is_owner %}
-  <p><a href="{% url 'authors:edit_profile' author.uuid %}">Edit profile</a></p>
+
+    <div id="github-entries">
+      {% if github_entries %}
+      {% for ge in github_entries %}
+      <div class="card">
+        <h3>{{ ge.title }}</h3>
+        <div class="content-preview">{{ ge.content }}</div>
+        <div class="meta">{{ ge.published|date:"M d, Y H:i" }}</div>
+      </div>
+      {% endfor %}
+      {% else %}
+      <p class="empty">No GitHub activity yet. {% if is_owner %}Click "Refresh GitHub Activity" to sync events from
+        GitHub.{% endif %}</p>
+      {% endif %}
+    </div>
+  </div>
   {% endif %}
 
-  <h2>Entries</h2>
+  <!-- Entries Section -->
+  <h2 class="section-title">Entries</h2>
   {% if is_owner %}
-    <p>You are viewing all of your entries (public, friends-only, and unlisted).</p>
-    <p><a href="{% url 'entries:entry-create' author.uuid %}">Create new entry</a></p>
+  <p class="hint">You are viewing all of your entries (public, friends-only, and unlisted).</p>
+  <a class="create-link" href="{% url 'entries:entry-create' author.uuid %}">+ Create new entry</a>
   {% elif is_friend %}
-    <p>You are friends with this author. You can see their public and friends-only entries.</p>
+  <p class="hint">You are friends with this author. You can see their public and friends-only entries.</p>
   {% else %}
-    <p>You are viewing this author's public entries.</p>
+  <p class="hint">Viewing this author's public entries.</p>
   {% endif %}
 
   {% if entries %}
-    <ul>
-      {% for entry in entries %}
-        <li>
-          {% if entry.web %}
-            <a href="{{ entry.web }}">
-              {{ entry.title|default:"(untitled entry)" }}
-            </a>
-          {% else %}
-            {{ entry.title|default:entry }}
-          {% endif %}
-        </li>
-      {% endfor %}
-    </ul>
+  {% for entry in entries %}
+  <div class="card">
+    <h3>
+      {% if entry.web %}
+      <a href="{{ entry.web }}">{{ entry.title|default:"(untitled entry)" }}</a>
+      {% else %}
+      {{ entry.title|default:"(untitled entry)" }}
+      {% endif %}
+    </h3>
+    <div class="content-preview">{{ entry.content|truncatechars:200 }}</div>
+    <div class="meta">
+      {{ entry.visibility }} · {{ entry.published|date:"M d, Y H:i" }}
+    </div>
+  </div>
+  {% endfor %}
   {% else %}
-    <p>No entries are visible.</p>
+  <p class="empty">No entries are visible.</p>
   {% endif %}
+</div>
+
+{% if author.github %}
+<!-- Script for refreshing GitHub activity -->
+<script>
+  function refreshGitHub() {
+    var btn = document.getElementById('refresh-github-btn');
+    var status = document.getElementById('refresh-status');
+    btn.disabled = true;
+    btn.textContent = 'Syncing…';
+    status.textContent = '';
+
+    fetch('{% url "authors:github_activity_api" author.uuid %}')
+      .then(function (resp) { return resp.json(); })
+      .then(function (data) {
+        btn.disabled = false;
+        btn.textContent = 'Refresh GitHub Activity';
+        if (data.events && data.events.length > 0) {
+          status.textContent = 'Synced ' + data.events.length + ' event(s). Reloading…';
+          setTimeout(function () { location.reload(); }, 800);
+        } else {
+          status.textContent = 'No new events found.';
+        }
+      })
+      .catch(function (err) {
+        btn.disabled = false;
+        btn.textContent = 'Refresh GitHub Activity';
+        status.textContent = 'Error: ' + err.message;
+      });
+  }
+</script>
+{% endif %}
 {% endblock %}

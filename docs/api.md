@@ -776,3 +776,157 @@ POST /accounts/login/        -> 302 redirect to follows/ui
 
 - Duplicate username: re-renders form with "A user with that username already exists."
 - Mismatched passwords: re-renders form with "Passwords do not match."
+
+---
+
+## Author Profile API
+
+### GET /api/authors/{AUTHOR_SERIAL}
+
+- **Purpose**: Retrieve the public profile of an author.
+- **Auth**: None required (public endpoint).
+
+#### Example request
+
+```http
+GET /api/authors/11111111-1111-1111-1111-111111111111
+```
+
+#### Example response
+
+```json
+{
+  "type": "author",
+  "id": "http://127.0.0.1:8000/api/authors/11111111-1111-1111-1111-111111111111",
+  "host": "http://127.0.0.1:8000/api/",
+  "web": "http://127.0.0.1:8000/authors/11111111-1111-1111-1111-111111111111",
+  "displayName": "Alice",
+  "github": "https://github.com/alice",
+  "profileImage": "https://example.com/alice.png",
+  "description": "About Alice"
+}
+```
+
+#### Status codes
+
+| Status | Meaning |
+|--------|---------|
+| `200 OK` | Profile returned successfully |
+| `404 Not Found` | Author does not exist or is deleted |
+
+---
+
+### PUT /api/authors/{AUTHOR_SERIAL}
+
+- **Purpose**: Update the authenticated author's profile.
+- **Auth**: Must be authenticated as the author in the URL path (owner-only).
+
+#### Example request
+
+```http
+PUT /api/authors/11111111-1111-1111-1111-111111111111
+Content-Type: application/json
+
+{
+  "displayName": "Alice Updated",
+  "description": "Updated description",
+  "github": "https://github.com/alice-updated",
+  "profileImage": "https://example.com/alice-v2.png"
+}
+```
+
+#### Example response
+
+```json
+{
+  "type": "author",
+  "id": "http://127.0.0.1:8000/api/authors/11111111-1111-1111-1111-111111111111",
+  "host": "http://127.0.0.1:8000/api/",
+  "web": "http://127.0.0.1:8000/authors/11111111-1111-1111-1111-111111111111",
+  "displayName": "Alice Updated",
+  "github": "https://github.com/alice-updated",
+  "profileImage": "https://example.com/alice-v2.png",
+  "description": "Updated description"
+}
+```
+
+#### Status codes
+
+| Status | Meaning |
+|--------|---------|
+| `200 OK` | Profile updated successfully |
+| `400 Bad Request` | Invalid JSON body or validation errors |
+| `403 Forbidden` | Not authenticated as the owner, or author is not local |
+| `404 Not Found` | Author does not exist or is deleted |
+
+---
+
+### Profile Management (UI)
+
+Authors can manage their profile from the browser:
+- **View profile**: `GET /authors/{AUTHOR_SERIAL}` — public page showing profile info, entries, and GitHub activity.
+- **Edit profile**: `GET /authors/{AUTHOR_SERIAL}/edit` — form to update display name, description, profile image, and GitHub URL (owner-only).
+- **Save changes**: `POST /authors/{AUTHOR_SERIAL}/edit` — saves the edited profile and redirects to the profile page.
+
+---
+
+## GitHub Activity API
+
+### GET /api/authors/{AUTHOR_SERIAL}/github
+
+- **Purpose**: Fetch the author's public GitHub activity, sync new events into the local database as public entries, and return the list of GitHub-sourced entries.
+- **Auth**: None required (public endpoint).
+
+#### Behaviour
+
+1. Extracts the GitHub username from the author's `github` URL field.
+2. Calls `https://api.github.com/users/{username}/events/public` to fetch recent public events.
+3. Creates a new `Entry` for each event not already stored (deduplicated by `external_id`).
+4. Returns all GitHub-sourced entries from the database (most recent first, up to 30).
+
+#### Example request
+
+```http
+GET /api/authors/11111111-1111-1111-1111-111111111111/github
+```
+
+#### Example response
+
+```json
+{
+  "type": "github_activity",
+  "events": [
+    {
+      "type": "github_event",
+      "title": "GitHub: PushEvent",
+      "content": "Pushed 2 commit(s) to octocat/Hello-World: Initial commit; Add README",
+      "published": "2026-03-15T12:00:00+00:00",
+      "id": "github-12345678"
+    },
+    {
+      "type": "github_event",
+      "title": "GitHub: WatchEvent",
+      "content": "Starred django/django",
+      "published": "2026-03-15T11:00:00+00:00",
+      "id": "github-12345679"
+    }
+  ]
+}
+```
+
+#### Status codes
+
+| Status | Meaning |
+|--------|---------|
+| `200 OK` | Events returned (may be empty if no GitHub URL or no events) |
+| `404 Not Found` | Author does not exist or is deleted |
+
+#### When author has no GitHub URL
+
+```json
+{
+  "type": "github_activity",
+  "events": []
+}
+```
+
