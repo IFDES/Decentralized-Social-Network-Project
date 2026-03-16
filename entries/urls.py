@@ -13,6 +13,11 @@ urlpatterns = [
         name="stream-page",
     ),
     path(
+        "entries/new/",
+        views.entry_create_me_page,
+        name="entry-create-me",
+    ),
+    path(
         "authors/<uuid:author_id>/entries/",
         views.author_entries_page,
         name="author-entries",

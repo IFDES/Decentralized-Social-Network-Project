@@ -251,6 +251,15 @@ def stream_page(request: HttpRequest) -> HttpResponse:
 
 
 @require_http_methods(["GET"])
+def entry_create_me_page(request: HttpRequest) -> HttpResponse:
+    """Redirect the current logged-in author to their new-entry form."""
+    author = _get_current_author(request)
+    if not author:
+        return redirect("authors:my_profile")
+    return redirect("entries:entry-create", author_id=author.uuid)
+
+
+@require_http_methods(["GET"])
 def author_entries_page(request: HttpRequest, author_id: UUID) -> HttpResponse:
     author = get_object_or_404(Author, pk=author_id, is_deleted=False)
     entries = (

@@ -1,10 +1,8 @@
-<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <p><a href="{% url 'entries:stream-page' %}">Back to stream</a></p>
-  <title>{{ entry.title|default:"Entry" }}</title>
+{% extends "base.html" %}
+
+{% block title %}{{ entry.title|default:"Entry" }}{% endblock %}
+
+{% block content %}
 <!-- Clickable images assisted by chatgpt on 14 March 2026 21:40 with prompt: "Can images be clickable so that it pops up in an elevated layer" -->
 
   <style>
@@ -53,8 +51,7 @@
       padding: 0.25rem;
     }
   </style>
-</head>
-<body>
+
   {% load markdown_extras %}
   <h1>{{ entry.title|default:"Entry" }}</h1>
   <p><strong>Author:</strong> <a href="{% url 'authors:profile' author.uuid %}">{{ author.display_name }}</a></p>
@@ -255,6 +252,4 @@
       });
     })();
   </script>
-</body>
-</html>
-
+{% endblock %}
