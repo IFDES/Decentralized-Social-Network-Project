@@ -1,12 +1,11 @@
+{% extends "base.html" %}
 {% load static %}
-<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Follows</title>
+
+{% block title %}Follows{% endblock %}
+
+{% block content %}
   <style>
-    body { font-family: system-ui, Arial, sans-serif; margin: 20px; max-width: 1200px; color: #111; background: #fff; }
+    .follows-page { font-family: system-ui, Arial, sans-serif; max-width: 1200px; color: #111; }
     h1 { margin-bottom: 0.2rem; }
     h2 { margin-top: 0; }
     ul { padding-left: 1.2rem; }
@@ -18,23 +17,8 @@
     .pill-pending { background: #f5f5f5; border: 1px solid #999; color: #111; }
     .pill-approved { background: #eee; border: 1px solid #333; color: #111; }
     button { padding: 4px 8px; margin-left: 6px; }
-    .nav-top { display: flex; align-items: center; gap: 12px; margin-bottom: 1rem; }
-    .nav-top a { display: inline-block; line-height: 0; }
-    .nav-top img { width: 28px; height: 28px; display: block; }
-    .nav-top a:hover { opacity: 0.7; }
   </style>
-</head>
-<body>
-  <nav class="nav-top" aria-label="Back navigation">
-    <a href="{% url 'entries:stream-page' %}" title="Back to stream">
-      <img src="{% static 'icons/Home.png' %}" alt="Back to stream" />
-    </a>
-    {% if current_author %}
-      <a href="{% url 'authors:profile' current_author.uuid %}" title="Back to profile">
-        <img src="{% static 'icons/Profile.png' %}" alt="Back to profile" />
-      </a>
-    {% endif %}
-  </nav>
+  <div class="follows-page">
   <h1>Follows</h1>
 
   {% if not current_author %}
@@ -153,5 +137,5 @@
 
     </div>
   {% endif %}
-</body>
-</html>
+  </div>
+{% endblock %}

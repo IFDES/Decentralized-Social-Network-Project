@@ -1,10 +1,8 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Upload image - {{ author.display_name }}</title>
-</head>
+{% extends "base.html" %}
+
+{% block title %}{ Upload image - {{ author.display_name }} }{% endblock %}
+
+{% block content %}
 <body>
   <h1>Upload image</h1>
   <p>Host an image on this node to use in CommonMark entries or as an image entry. Use the URL in markdown: <code>![alt](url)</code></p>
@@ -34,4 +32,4 @@
     <a href="{% url 'authors:profile' author.uuid %}">Back to profile</a>
   </p>
 </body>
-</html>
+{% endblock %}

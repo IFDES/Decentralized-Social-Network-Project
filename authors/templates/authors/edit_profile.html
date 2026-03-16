@@ -1,10 +1,8 @@
-<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Edit {{ author.display_name }}</title>
-</head>
+{% extends "base.html" %}
+
+{% block title %}{Edit {{ author.display_name }}}{% endblock %}
+
+{% block content %}
 <body>
   <h1>Edit Profile</h1>
   <form method="post">
@@ -14,4 +12,4 @@
   </form>
   <p><a href="{% url 'authors:profile' author.uuid %}">Back to profile</a></p>
 </body>
-</html>
+{% endblock %}

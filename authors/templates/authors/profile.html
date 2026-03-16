@@ -1,31 +1,8 @@
-<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <style>
-    .button-row {
-      display: flex;
-      gap: 10px;
-    }
-  </style>
-  <div class="button-row">
-    <form action="{% url 'entries:stream-page' %}" method="get">
-      <button type="submit">Back to stream</button>
-    </form>
-    {% if is_owner %}
-      <form action="{% url 'follows:follow-ui' %}" method="get">
-        <button type="submit">Go to follows</button>
-      </form>
-    {% endif %}
-    <form action="{% url 'logout' %}" method="post">
-      {% csrf_token %}
-      <button type="submit">Log out</button>
-    </form>
-  </div>
-  <title>{{ author.display_name }}</title>
-</head>
-<body>
+{% extends "base.html" %}
+
+{% block title %}{{ author.display_name }}{% endblock %}
+
+{% block content %}
   <h1>{{ author.display_name }}</h1>
   {% if author.profile_image %}
     <img src="{{ author.profile_image }}" alt="{{ author.display_name }}" width="160">
@@ -70,5 +47,4 @@
   {% else %}
     <p>No entries are visible.</p>
   {% endif %}
-</body>
-</html>
+{% endblock %}

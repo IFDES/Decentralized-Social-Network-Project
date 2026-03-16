@@ -1,12 +1,11 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <form action="{% url 'authors:my_profile' %}" method="get">
-    <button type="submit">View my profile</button>
-  </form>
-  <title>Stream</title>
+{% extends "base.html" %}
+{% load markdown_extras %}
+
+{% block title %}Stream{% endblock %}
+
+{% block content %}
+  <h1>Stream</h1>
+  <p>Stream: public entries for everyone; when logged in, you also see unlisted from authors you follow and friends-only from friends.</p>
 
 <!-- Clickable images assisted by chatgpt on 14 March 2026 21:40 with prompt: "Can images be clickable so that it pops up in an elevated layer" -->
 
@@ -58,12 +57,6 @@
       padding: 0.25rem;
     }
   </style>
-</head>
-<body>
-  {% load markdown_extras %}
-
-  <h1>Stream</h1>
-  <p>Stream: public entries for everyone; when logged in, you also see unlisted from authors you follow and friends-only from friends.</p>
 
   {% if entries %}
     <ul style="list-style: none; padding-left: 0;">
@@ -163,5 +156,4 @@
       });
     })();
   </script>
-</body>
-</html>
+{% endblock %}

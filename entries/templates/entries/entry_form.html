@@ -1,16 +1,10 @@
-<!doctype html>
-<html lang="en">
-<form action="{% url 'authors:my_profile' %}" method="get">
-    <button type="submit">Back to profile</button>
-</form>
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>
-    {% if is_create %}Create entry{% else %}Edit entry{% endif %} - {{ author.display_name }}
-  </title>
-</head>
-<body>
+{% extends "base.html" %}
+
+{% block title %}
+  {% if is_create %}Create entry{% else %}Edit entry{% endif %} - {{ author.display_name }}
+{% endblock %}
+
+{% block content %}
   <h1>
     {% if is_create %}Create entry{% else %}Edit entry{% endif %}
     for {{ author.display_name }}
@@ -33,12 +27,6 @@
     </button>
   </form>
 
-  <p>
-    {% if not is_create %}
-      <a href="{% url 'entries:entry-detail' author.uuid entry.uuid %}">Back to entry</a> |
-    {% endif %}
-    <a href="{% url 'authors:profile' author.uuid %}">Back to profile</a>
-  </p>
   <script>
     (function() {
       var ct = document.querySelector('[name="content_type"]');
@@ -49,6 +37,4 @@
       toggle();
     })();
   </script>
-</body>
-</html>
-
+{% endblock %}
