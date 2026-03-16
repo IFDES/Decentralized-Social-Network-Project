@@ -107,12 +107,6 @@ class Entry(models.Model):
     )
     content = models.TextField()
 
-    image_urls = models.JSONField(
-        default=list,
-        blank=True,
-        help_text="List of image URLs to display below the main content.",
-    )
-
     visibility = models.CharField(
         max_length=16,
         choices=VISIBILITY_CHOICES,

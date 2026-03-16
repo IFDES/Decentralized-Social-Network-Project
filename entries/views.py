@@ -44,21 +44,18 @@ def _build_image_urls_from_request(
     author: Author,
     visibility: str,
     entry: Entry | None = None,
-    ) -> list:
-    """Build ordered list of image URLs from uploaded files and pasted URL text."""
-    urls = []
+) -> None:
     allowed = {"image/png", "image/jpeg", "image/gif", "image/webp"}
 
     for f in request.FILES.getlist("image_files") or []:
         if f.content_type in allowed:
             try:
-                hosted = HostedImage.objects.create(
+                HostedImage.objects.create(
                     uploaded_by=author,
                     file=f,
                     visibility=visibility,
                     entry=entry,
                 )
-                urls.append(_hosted_image_canonical_url(request, hosted))
             except Exception:
                 pass
 
@@ -66,9 +63,9 @@ def _build_image_urls_from_request(
     for part in text.replace(",", "\n").splitlines():
         part = part.strip()
         if part and (part.startswith("http://") or part.startswith("https://")):
-            urls.append(part)
-
-    return urls
+            # For external URLs, we don't create HostedImage; clients can embed
+            # them directly in markdown content.
+            continue
 
 
 # This file is assisted by CoPilot on 27 Feb 2026 02:10 with the prompt
@@ -146,7 +143,7 @@ def _build_entry_web(author: Author, entry: Entry) -> str:
     return f"{base}/authors/{author.uuid}/entries/{entry.uuid}"
 
 
-def _entry_to_json(entry: Entry) -> dict:
+def _entry_to_json(request: HttpRequest, entry: Entry) -> dict:
     author = entry.author
 
     entry_id = _build_entry_id(author, entry)
@@ -172,6 +169,11 @@ def _entry_to_json(entry: Entry) -> dict:
     likes_page = list(likes_queryset[:5])
     likes_payload = likes_list_json(entry, 1, 5, likes_count, likes_page)
 
+    image_urls = [
+        _hosted_image_canonical_url(request, hosted)
+        for hosted in entry.hosted_images.all()
+    ]
+
     return {
         "type": "entry",
         "title": entry.title,
@@ -194,7 +196,7 @@ def _entry_to_json(entry: Entry) -> dict:
         "published": entry.published.astimezone(timezone.utc).isoformat(),
         "updated_at": entry.updated_at.astimezone(timezone.utc).isoformat(),
         "visibility": entry.visibility,
-        "image_urls": getattr(entry, "image_urls", None) or [],
+        "image_urls": image_urls,
     }
 
 
@@ -559,13 +561,13 @@ def entry_create_page(request: HttpRequest, author_id: UUID) -> HttpResponse:
             entry.author = author
             entry.save()
 
-            entry.image_urls = _build_image_urls_from_request(
+            _build_image_urls_from_request(
                 request,
                 author,
                 visibility=entry.visibility,
                 entry=entry,
             )
-            entry.save(update_fields=["image_urls", "updated_at"])
+            entry.save(update_fields=["updated_at"])
             return redirect("entries:entry-detail", author_id=author.uuid, entry_id=entry.uuid)
     else:
         form = EntryForm()
@@ -602,18 +604,21 @@ def entry_edit_page(
             entry = form.save(commit=False)
             entry.save()
 
-            entry.image_urls = _build_image_urls_from_request(
+            _build_image_urls_from_request(
                 request,
                 author,
                 visibility=entry.visibility,
                 entry=entry,
             )
-            entry.save(update_fields=["image_urls", "updated_at"])
+            entry.save(update_fields=["updated_at"])
             return redirect("entries:entry-detail", author_id=author.uuid, entry_id=entry.uuid)
     else:
         form = EntryForm(instance=entry)
 
-    existing_image_urls_text = "\n".join(entry.image_urls or [])
+    existing_image_urls_text = "\n".join(
+        _hosted_image_canonical_url(request, hosted)
+        for hosted in entry.hosted_images.all()
+    )
 
     return render(
         request,
@@ -805,7 +810,7 @@ def stream_api(request: HttpRequest) -> HttpResponse:
             "page_number": page_number,
             "size": size,
             "count": count,
-            "src": [_entry_to_json(entry) for entry in page_items],
+            "src": [_entry_to_json(request, entry) for entry in page_items],
         }
     )
 
@@ -867,7 +872,7 @@ def author_entries_api(request: HttpRequest, author_id: UUID) -> HttpResponse:
                 "page_number": page_number,
                 "size": size,
                 "count": count,
-                "src": [_entry_to_json(entry) for entry in page_items],
+                "src": [_entry_to_json(request, entry) for entry in page_items],
             }
         )
 
@@ -902,7 +907,7 @@ def author_entries_api(request: HttpRequest, author_id: UUID) -> HttpResponse:
         visibility=visibility,
     )
 
-    return JsonResponse(_entry_to_json(entry), status=201)
+    return JsonResponse(_entry_to_json(request, entry), status=201)
 
 
 @csrf_exempt
@@ -919,7 +924,7 @@ def entry_detail_api(
         viewer = _get_current_author(request)
         if not _can_view_entry_detail(request, entry, viewer):
             return HttpResponseForbidden("You do not have permission to view this entry.")
-        return JsonResponse(_entry_to_json(entry))
+        return JsonResponse(_entry_to_json(request, entry))
 
     if not user_matches_author_uuid(request, author.uuid):
         return HttpResponseForbidden("Not authorized for this author.")
@@ -952,7 +957,7 @@ def entry_detail_api(
         entry.content_type = content_type
         entry.visibility = visibility
         entry.save()
-        return JsonResponse(_entry_to_json(entry))
+        return JsonResponse(_entry_to_json(request, entry))
 
     # DELETE
     if entry.is_deleted:
