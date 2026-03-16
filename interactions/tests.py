@@ -6,6 +6,7 @@ from django.urls import reverse
 
 from authors.models import Author, AuthorAccount
 from entries.models import Entry
+from follows.models import FollowRelationship
 from interactions.models import Comment, CommentLike, EntryLike
 
 
@@ -94,6 +95,179 @@ class EntryCommentsApiTests(TestCase):
             content_type="application/json",
         )
         self.assertEqual(response.status_code, 400)
+
+
+class FriendsEntryCommentVisibilityApiTests(TestCase):
+    def setUp(self):
+        self.client = Client()
+
+        self.owner = Author.objects.create(display_name="Owner")
+        self.friend = Author.objects.create(display_name="Friend")
+        self.stranger = Author.objects.create(display_name="Stranger")
+        self.stranger_commenter = Author.objects.create(display_name="Stranger Commenter")
+        self.remote_comment_author = Author.objects.create(
+            display_name="Remote Commenter",
+            fqid="https://remote.example/api/authors/remote-commenter",
+            host="https://remote.example/api/",
+            web="https://remote.example/authors/remote-commenter",
+            is_local=False,
+        )
+
+        self.owner_user = User.objects.create_user(username="comment_owner", password="passA12345")
+        self.friend_user = User.objects.create_user(username="comment_friend", password="passB12345")
+        self.stranger_user = User.objects.create_user(username="comment_stranger", password="passC12345")
+        self.stranger_commenter_user = User.objects.create_user(
+            username="comment_stranger_commenter",
+            password="passD12345",
+        )
+
+        AuthorAccount.objects.create(user=self.owner_user, author=self.owner)
+        AuthorAccount.objects.create(user=self.friend_user, author=self.friend)
+        AuthorAccount.objects.create(user=self.stranger_user, author=self.stranger)
+        AuthorAccount.objects.create(
+            user=self.stranger_commenter_user,
+            author=self.stranger_commenter,
+        )
+
+        FollowRelationship.objects.create(
+            follower=self.owner,
+            followee=self.friend,
+            status=FollowRelationship.Status.APPROVED,
+        )
+        FollowRelationship.objects.create(
+            follower=self.friend,
+            followee=self.owner,
+            status=FollowRelationship.Status.APPROVED,
+        )
+
+        self.entry = Entry.objects.create(
+            author=self.owner,
+            title="Friends only entry",
+            content="Hidden thread",
+            visibility=Entry.VISIBILITY_FRIENDS,
+        )
+
+        self.owner_comment = Comment.objects.create(
+            author=self.owner,
+            entry=self.entry,
+            comment="Owner comment",
+        )
+        self.friend_comment = Comment.objects.create(
+            author=self.friend,
+            entry=self.entry,
+            comment="Friend comment",
+        )
+        self.stranger_comment = Comment.objects.create(
+            author=self.stranger_commenter,
+            entry=self.entry,
+            comment="Stranger commenter comment",
+        )
+        self.remote_comment = Comment.objects.create(
+            author=self.remote_comment_author,
+            entry=self.entry,
+            comment="Remote stored comment",
+            fqid="https://remote.example/api/comments/1",
+        )
+        self.deleted_comment = Comment.objects.create(
+            author=self.friend,
+            entry=self.entry,
+            comment="Deleted comment",
+        )
+        self.deleted_comment.delete()
+
+    def _comments_url(self):
+        return reverse("entries:entry-comments-api", args=[self.owner.uuid, self.entry.uuid])
+
+    def _comment_detail_url(self, comment):
+        return reverse(
+            "entries:entry-comment-detail-api",
+            args=[self.owner.uuid, self.entry.uuid, str(comment.uuid)],
+        )
+
+    def _comment_likes_url(self, comment):
+        return reverse(
+            "entries:comment-likes-api",
+            args=[self.owner.uuid, self.entry.uuid, comment.uuid],
+        )
+
+    def test_entry_author_sees_all_visible_comments_on_friends_entry(self):
+        self.client.force_login(self.owner_user)
+        response = self.client.get(self._comments_url())
+        self.assertEqual(response.status_code, 200)
+
+        payload = response.json()
+        returned_comments = [item["comment"] for item in payload["src"]]
+
+        self.assertEqual(payload["count"], 4)
+        self.assertCountEqual(
+            returned_comments,
+            [
+                "Owner comment",
+                "Friend comment",
+                "Stranger commenter comment",
+                "Remote stored comment",
+            ],
+        )
+        self.assertNotIn("Deleted comment", returned_comments)
+
+    def test_friend_sees_all_visible_comments_on_friends_entry(self):
+        self.client.force_login(self.friend_user)
+        response = self.client.get(self._comments_url())
+        self.assertEqual(response.status_code, 200)
+
+        payload = response.json()
+        returned_comments = [item["comment"] for item in payload["src"]]
+
+        self.assertEqual(payload["count"], 4)
+        self.assertCountEqual(
+            returned_comments,
+            [
+                "Owner comment",
+                "Friend comment",
+                "Stranger commenter comment",
+                "Remote stored comment",
+            ],
+        )
+
+    def test_non_friend_non_commenter_sees_no_comments_on_friends_entry(self):
+        self.client.force_login(self.stranger_user)
+        response = self.client.get(self._comments_url())
+        self.assertEqual(response.status_code, 200)
+
+        payload = response.json()
+        self.assertEqual(payload["count"], 0)
+        self.assertEqual(payload["src"], [])
+
+    def test_non_friend_commenter_sees_only_their_own_comment(self):
+        self.client.force_login(self.stranger_commenter_user)
+        response = self.client.get(self._comments_url())
+        self.assertEqual(response.status_code, 200)
+
+        payload = response.json()
+        returned_comments = [item["comment"] for item in payload["src"]]
+
+        self.assertEqual(payload["count"], 1)
+        self.assertEqual(returned_comments, ["Stranger commenter comment"])
+
+    def test_non_friend_commenter_can_fetch_only_their_own_single_comment(self):
+        self.client.force_login(self.stranger_commenter_user)
+
+        own_response = self.client.get(self._comment_detail_url(self.stranger_comment))
+        self.assertEqual(own_response.status_code, 200)
+        self.assertEqual(own_response.json()["comment"], "Stranger commenter comment")
+
+        hidden_response = self.client.get(self._comment_detail_url(self.owner_comment))
+        self.assertEqual(hidden_response.status_code, 404)
+
+    def test_non_friend_commenter_cannot_access_hidden_comment_likes_endpoint(self):
+        self.client.force_login(self.stranger_commenter_user)
+
+        hidden_response = self.client.get(self._comment_likes_url(self.owner_comment))
+        self.assertEqual(hidden_response.status_code, 404)
+
+        visible_response = self.client.get(self._comment_likes_url(self.stranger_comment))
+        self.assertEqual(visible_response.status_code, 200)
+        self.assertEqual(visible_response.json()["count"], 0)
 
 
 class EntryLikesApiTests(TestCase):

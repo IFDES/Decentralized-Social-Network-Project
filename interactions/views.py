@@ -16,6 +16,11 @@ from django.views.decorators.http import require_http_methods  # type: ignore[im
 
 from authors.models import Author
 from entries.models import Entry
+from entries.visibility import (
+    get_request_author,
+    get_visible_comments_queryset,
+    is_node_admin,
+)
 
 from .models import Comment, CommentLike, EntryLike
 from .serializers import (
@@ -143,7 +148,11 @@ def entry_comments_api(request: HttpRequest, author_id: UUID, entry_id: UUID) ->
         return HttpResponseBadRequest("Entry has been deleted.")
 
     if request.method == "GET":
-        queryset = Comment.objects.filter(entry=entry).select_related("author", "entry").order_by("-published")
+        queryset = get_visible_comments_queryset(
+            entry,
+            get_request_author(request),
+            is_admin=is_node_admin(request),
+        ).order_by("-published")
         page_number, size, count, page_items = _paginate_queryset(request, queryset)
         return JsonResponse(comments_list_json(entry, page_number, size, count, page_items))
 
@@ -184,6 +193,11 @@ def entry_comment_detail_api(
     entry = get_object_or_404(Entry, pk=entry_id, author=entry_author)
     if not entry.is_visible:
         return HttpResponseBadRequest("Entry has been deleted.")
+    visible_comments = get_visible_comments_queryset(
+        entry,
+        get_request_author(request),
+        is_admin=is_node_admin(request),
+    )
 
     # comment_ref may be:
     # - UUID (local)
@@ -192,13 +206,13 @@ def entry_comment_detail_api(
 
     comment = None
     try:
-        comment = Comment.objects.select_related("author", "entry").get(pk=UUID(decoded), entry=entry)
+        comment = visible_comments.get(pk=UUID(decoded))
     except (ValueError, Comment.DoesNotExist):
         pass
 
     if comment is None:
         try:
-            comment = Comment.objects.select_related("author", "entry").get(fqid=decoded, entry=entry)
+            comment = visible_comments.get(fqid=decoded)
         except Comment.DoesNotExist:
             return JsonResponse({"detail": "Comment not found."}, status=404)
 
@@ -258,9 +272,16 @@ def comment_likes_api(
     entry = get_object_or_404(Entry, pk=entry_id, author=entry_author)
     if not entry.is_visible:
         return HttpResponseBadRequest("Entry has been deleted.")
-    comment = get_object_or_404(Comment, pk=comment_id, entry=entry)
 
     if request.method == "GET":
+        comment = get_object_or_404(
+            get_visible_comments_queryset(
+                entry,
+                get_request_author(request),
+                is_admin=is_node_admin(request),
+            ),
+            pk=comment_id,
+        )
         queryset = (
             CommentLike.objects.filter(comment=comment)
             .select_related("author", "comment")
@@ -277,6 +298,14 @@ def comment_likes_api(
     author = _resolve_like_author(request, payload)
     if not author:
         return HttpResponseBadRequest("Unable to resolve like author.")
+    comment = get_object_or_404(
+        get_visible_comments_queryset(
+            entry,
+            get_request_author(request) or author,
+            is_admin=is_node_admin(request),
+        ),
+        pk=comment_id,
+    )
 
     if request.method == "POST":
         cl, created = CommentLike.objects.get_or_create(

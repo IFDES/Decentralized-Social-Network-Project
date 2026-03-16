@@ -166,6 +166,98 @@ class EntryJsonCommentsLikesTests(TestCase):
         self.assertEqual(len(entry_json["likes"]["src"]), 1)
 
 
+class FriendsEntryCommentVisibilityTests(TestCase):
+    def setUp(self):
+        self.client = Client()
+
+        self.owner = Author.objects.create(display_name="Owner")
+        self.friend = Author.objects.create(display_name="Friend")
+        self.stranger_commenter = Author.objects.create(display_name="Stranger Commenter")
+        self.remote_comment_author = Author.objects.create(
+            display_name="Remote Commenter",
+            fqid="https://remote.example/api/authors/remote-commenter-inline",
+            host="https://remote.example/api/",
+            web="https://remote.example/authors/remote-commenter-inline",
+            is_local=False,
+        )
+
+        self.friend_user = User.objects.create_user(username="inline_friend", password="passA12345")
+        AuthorAccount.objects.create(user=self.friend_user, author=self.friend)
+
+        FollowRelationship.objects.create(
+            follower=self.owner,
+            followee=self.friend,
+            status=FollowRelationship.Status.APPROVED,
+        )
+        FollowRelationship.objects.create(
+            follower=self.friend,
+            followee=self.owner,
+            status=FollowRelationship.Status.APPROVED,
+        )
+
+        self.entry = Entry.objects.create(
+            author=self.owner,
+            title="Friends entry",
+            content="Body",
+            visibility=Entry.VISIBILITY_FRIENDS,
+        )
+        Comment.objects.create(author=self.owner, entry=self.entry, comment="Owner inline comment")
+        Comment.objects.create(author=self.friend, entry=self.entry, comment="Friend inline comment")
+        Comment.objects.create(
+            author=self.stranger_commenter,
+            entry=self.entry,
+            comment="Stranger inline comment",
+        )
+        Comment.objects.create(
+            author=self.remote_comment_author,
+            entry=self.entry,
+            comment="Remote inline comment",
+            fqid="https://remote.example/api/comments/inline-1",
+        )
+        deleted_comment = Comment.objects.create(
+            author=self.friend,
+            entry=self.entry,
+            comment="Deleted inline comment",
+        )
+        deleted_comment.delete()
+
+    def test_friends_entry_detail_api_filters_embedded_comments_with_shared_visibility(self):
+        self.client.force_login(self.friend_user)
+
+        response = self.client.get(
+            reverse("entries:entry-detail-api", args=[self.owner.uuid, self.entry.uuid])
+        )
+        self.assertEqual(response.status_code, 200)
+
+        payload = response.json()
+        returned_comments = [item["comment"] for item in payload["comments"]["src"]]
+
+        self.assertEqual(payload["comments"]["count"], 4)
+        self.assertCountEqual(
+            returned_comments,
+            [
+                "Owner inline comment",
+                "Friend inline comment",
+                "Stranger inline comment",
+                "Remote inline comment",
+            ],
+        )
+        self.assertNotIn("Deleted inline comment", returned_comments)
+
+    def test_friends_entry_detail_page_uses_same_visible_comments_queryset(self):
+        self.client.force_login(self.friend_user)
+
+        response = self.client.get(
+            reverse("entries:entry-detail", args=[self.owner.uuid, self.entry.uuid])
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Owner inline comment")
+        self.assertContains(response, "Friend inline comment")
+        self.assertContains(response, "Stranger inline comment")
+        self.assertContains(response, "Remote inline comment")
+        self.assertNotContains(response, "Deleted inline comment")
+
+
 class StreamApiTests(TestCase):
     def setUp(self):
         self.client = Client()

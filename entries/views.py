@@ -23,12 +23,18 @@ from django.http import FileResponse
 from authors.models import Author, AuthorAccount
 from config.core.permissions import user_matches_author_uuid
 from follows.models import FollowRelationship
-
 from interactions.models import Comment, CommentLike, EntryLike
 from interactions.serializers import comments_list_json, likes_list_json
 
 from .forms import EntryDeleteForm, EntryForm
 from .models import Entry, HostedImage
+from .visibility import (
+    can_view_entry,
+    entry_is_deleted,
+    get_request_author,
+    get_visible_comments_queryset,
+    is_node_admin,
+)
 
 # This file is assisted by CoPilot on 14 March 2026 22:10 with the prompt
 # "Help me fix these errors "ERROR MESSAGES" in the views.py file for image hosting in entries in Django"
@@ -74,29 +80,14 @@ def _build_image_urls_from_request(
 
 def _get_current_author(request: HttpRequest):
     """Resolve the current viewer as an Author (session + AuthorAccount), or None."""
-    user = getattr(request, "user", None)
-    if not user or not getattr(user, "is_authenticated", False):
-        return None
-    try:
-        account = AuthorAccount.objects.select_related("author").get(user=user)
-        return account.author if not account.author.is_deleted else None
-    except AuthorAccount.DoesNotExist:
-        return None
+    return get_request_author(request)
 
 def _is_node_admin(request: HttpRequest) -> bool:
-    user = getattr(request, "user", None)
-    return bool(
-        user
-        and getattr(user, "is_authenticated", False)
-        and (
-            getattr(user, "is_staff", False)
-            or getattr(user, "is_superuser", False)
-        )
-    )
+    return is_node_admin(request)
 
 
 def _entry_is_deleted(entry: Entry) -> bool:
-    return entry.is_deleted or entry.visibility == Entry.VISIBILITY_DELETED
+    return entry_is_deleted(entry)
 
 
 def _can_view_entry_detail(
@@ -107,27 +98,7 @@ def _can_view_entry_detail(
     """
     Access rules for viewing a single entry by direct URL / API detail endpoint.
     """
-    is_admin = _is_node_admin(request)
-
-    if _entry_is_deleted(entry):
-        return is_admin
-
-    if entry.visibility in (
-        Entry.VISIBILITY_PUBLIC,
-        Entry.VISIBILITY_UNLISTED,
-    ):
-        return True
-
-    if is_admin:
-        return True
-
-    if viewer and viewer.uuid == entry.author_id:
-        return True
-
-    if entry.visibility == Entry.VISIBILITY_FRIENDS:
-        return viewer is not None and FollowRelationship.are_friends(viewer, entry.author)
-
-    return False
+    return can_view_entry(entry, viewer, is_admin=_is_node_admin(request))
 
 def _build_entry_id(author: Author, entry: Entry) -> str:
     if entry.fqid:
@@ -145,17 +116,19 @@ def _build_entry_web(author: Author, entry: Entry) -> str:
 
 def _entry_to_json(request: HttpRequest, entry: Entry) -> dict:
     author = entry.author
+    viewer = _get_current_author(request)
+    admin_viewer = _is_node_admin(request)
 
     entry_id = _build_entry_id(author, entry)
     web = _build_entry_web(author, entry)
 
     base = settings.SERVICE_BASE_URL.rstrip("/")
 
-    comments_queryset = (
-        Comment.objects.filter(entry=entry)
-        .select_related("author", "entry")
-        .order_by("-published")
-    )
+    comments_queryset = get_visible_comments_queryset(
+        entry,
+        viewer,
+        is_admin=admin_viewer,
+    ).order_by("-published")
     comments_count = comments_queryset.count()
     comments_page = list(comments_queryset[:5])
     comments_payload = comments_list_json(entry, 1, 5, comments_count, comments_page)
@@ -204,17 +177,7 @@ def _can_view_entry(entry: Entry, viewer: Author | None) -> bool:
     """
     Legacy helper for non-detail checks. Deleted entries are never visible here.
     """
-    if _entry_is_deleted(entry):
-        return False
-    if entry.visibility in (Entry.VISIBILITY_PUBLIC, Entry.VISIBILITY_UNLISTED):
-        return True
-    if entry.visibility == Entry.VISIBILITY_FRIENDS:
-        if not viewer:
-            return False
-        if viewer.uuid == entry.author_id:
-            return True
-        return FollowRelationship.are_friends(viewer, entry.author)
-    return False
+    return can_view_entry(entry, viewer, is_admin=False)
 
 
 def get_profile_entry_visibilities(viewer, author) -> list:
@@ -377,7 +340,7 @@ def entry_detail_page(
         return HttpResponseForbidden("You do not have permission to view this entry.")
         
     comments = list(
-        Comment.objects.filter(entry=entry)
+        get_visible_comments_queryset(entry, current_author, is_admin=_is_node_admin(request))
         .select_related("author")
         .order_by("-published")[:20]
     )

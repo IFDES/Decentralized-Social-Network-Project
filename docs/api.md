@@ -170,11 +170,11 @@ Entries with `visibility = DELETED` are also excluded from stream results.
 
 #### Entries included in this implementation
 
-- Includes all `PUBLIC` entries this node currently knows about via the local `Entry` store.
-  This covers local entries and also covers remote entries if/when they are ingested and stored as `Entry` rows.
-- Excludes all non-public entries (`FRIENDS`, `UNLISTED`, and any equivalent private visibility values).
-- Relationship-based visibility (follows/friends) is not implemented in this repo yet, so no additional relationship visibility is applied.
-- Non-public entries are excluded for all viewers.
+- Anonymous viewers receive `PUBLIC` entries only.
+- Authenticated viewers also receive:
+  - `UNLISTED` entries from authors they follow with `APPROVED` status.
+  - `FRIENDS` entries from authors where the relationship is mutual `APPROVED` follow.
+- Entries are read from the local `Entry` store, so the same rules apply to locally created entries and any remote entries that have been ingested and stored here.
 
 #### Example request
 
@@ -184,7 +184,13 @@ GET /api/stream?page=1&size=2
 
 The response order is newest-first according to `updated_at`.
 
-#### Example response
+#### Example request
+
+```http
+GET /api/authors/f67eb8e9-57e9-494b-88f4-c7234ce3f39b/entries/141ffa4c-43ec-42c6-83bb-e65eb72db04d/comments
+```
+
+#### Example response for a friend viewer
 
 ```json
 {
@@ -560,11 +566,20 @@ FQIDs (fully qualified IDs) used in follow URL paths must be **percent-encoded**
 ## Comments API
 
 Comments are attached to an entry. Each comment has an author, body, content type (`text/plain` or `text/markdown`), and published time.
+For `FRIENDS` entries, friendship in this repo means a mutual `APPROVED` follow (`FollowRelationship.are_friends`).
+Comment visibility is enforced with the same shared queryset logic in the REST API and the HTML entry detail page.
+Deleted entries never expose comments. This repo does not soft-delete comments today; deleted comments are excluded because they are removed from the `Comment` table.
 
 ### GET /api/authors/{AUTHOR_SERIAL}/entries/{ENTRY_SERIAL}/comments
 
 - **When to use**: List comments on an entry. Use when displaying the comment thread or when syncing comments (e.g. for a remote node).
-- **Auth**: None required for public entries. Only comments for entries the caller can access are returned (visibility rules match the entry).
+- **Auth**: None required for public entries. The response only includes comments visible to the current viewer.
+- **Visibility on `FRIENDS` entries**:
+  - The entry author sees all comments on the entry.
+  - The entry author's friends see all comments on the entry.
+  - A non-friend commenter sees only comments they authored themselves.
+  - A non-friend who did not author a comment sees no comments.
+  - Anonymous viewers see no comments.
 - **Query params**:
   - `page` (optional, default `1`) – 1-based page number
   - `size` (optional, default `10`) – page size
@@ -583,7 +598,7 @@ Comments are attached to an entry. Each comment has an author, body, content typ
   "web": "http://127.0.0.1:8000/authors/f67eb8e9-57e9-494b-88f4-c7234ce3f39b/entries/141ffa4c-43ec-42c6-83bb-e65eb72db04d",
   "page_number": 1,
   "size": 5,
-  "count": 1,
+  "count": 3,
   "src": [
     {
       "type": "comment",
@@ -595,9 +610,75 @@ Comments are attached to an entry. Each comment has an author, body, content typ
         "profileImage": "",
         "web": "..."
       },
-      "comment": "Nice post",
+      "comment": "Owner comment",
       "contentType": "text/plain",
       "published": "2026-03-01T12:00:00+00:00",
+      "id": "http://127.0.0.1:8000/api/authors/.../commented/...",
+      "entry": "http://127.0.0.1:8000/api/authors/.../entries/...",
+      "web": "http://127.0.0.1:8000/authors/.../entries/..."
+    },
+    {
+      "type": "comment",
+      "author": {
+        "type": "author",
+        "id": "http://127.0.0.1:8000/api/authors/...",
+        "displayName": "Friend",
+        "github": "",
+        "profileImage": "",
+        "web": "..."
+      },
+      "comment": "Friend comment",
+      "contentType": "text/plain",
+      "published": "2026-03-01T12:05:00+00:00",
+      "id": "http://127.0.0.1:8000/api/authors/.../commented/...",
+      "entry": "http://127.0.0.1:8000/api/authors/.../entries/...",
+      "web": "http://127.0.0.1:8000/authors/.../entries/..."
+    },
+    {
+      "type": "comment",
+      "author": {
+        "type": "author",
+        "id": "http://127.0.0.1:8000/api/authors/...",
+        "displayName": "Stranger Commenter",
+        "github": "",
+        "profileImage": "",
+        "web": "..."
+      },
+      "comment": "Stranger commenter comment",
+      "contentType": "text/plain",
+      "published": "2026-03-01T12:10:00+00:00",
+      "id": "http://127.0.0.1:8000/api/authors/.../commented/...",
+      "entry": "http://127.0.0.1:8000/api/authors/.../entries/...",
+      "web": "http://127.0.0.1:8000/authors/.../entries/..."
+    }
+  ]
+}
+```
+
+#### Example response for a non-friend commenter on the same `FRIENDS` entry
+
+```json
+{
+  "type": "comments",
+  "id": "http://127.0.0.1:8000/api/authors/f67eb8e9-57e9-494b-88f4-c7234ce3f39b/entries/141ffa4c-43ec-42c6-83bb-e65eb72db04d/comments",
+  "web": "http://127.0.0.1:8000/authors/f67eb8e9-57e9-494b-88f4-c7234ce3f39b/entries/141ffa4c-43ec-42c6-83bb-e65eb72db04d",
+  "page_number": 1,
+  "size": 5,
+  "count": 1,
+  "src": [
+    {
+      "type": "comment",
+      "author": {
+        "type": "author",
+        "id": "http://127.0.0.1:8000/api/authors/...",
+        "displayName": "Stranger Commenter",
+        "github": "",
+        "profileImage": "",
+        "web": "..."
+      },
+      "comment": "Stranger commenter comment",
+      "contentType": "text/plain",
+      "published": "2026-03-01T12:10:00+00:00",
       "id": "http://127.0.0.1:8000/api/authors/.../commented/...",
       "entry": "http://127.0.0.1:8000/api/authors/.../entries/...",
       "web": "http://127.0.0.1:8000/authors/.../entries/..."
@@ -622,7 +703,7 @@ Comments are attached to an entry. Each comment has an author, body, content typ
 ### GET /api/authors/{AUTHOR_SERIAL}/entries/{ENTRY_SERIAL}/comments/{COMMENT_REF}
 
 - **When to use**: Fetch a single comment by UUID or by FQID (comment ref may be the comment UUID or the percent-encoded comment FQID).
-- **Response**: `200 OK` with a single `comment` object, or `404 Not Found` if the comment or entry does not exist or the entry is not visible.
+- **Response**: `200 OK` with a single `comment` object, or `404 Not Found` if the comment does not exist or is not visible to the current viewer.
 
 ---
 
@@ -711,7 +792,7 @@ Comment likes are per (author, comment); at most one like per author per comment
 - **Status**: `201 Created` when a new like is created.
 - **Status**: `200 OK` when the like already existed (idempotent).
 - **Status**: `400 Bad Request` if author cannot be resolved.
-- **Status**: `404 Not Found` if the entry or comment does not exist or does not match the path.
+- **Status**: `404 Not Found` if the entry or comment does not exist, is hidden from the caller, or does not match the path.
 
 ##### Example request
 
@@ -753,13 +834,14 @@ Content-Type: application/json
 
 - **Status**: `204 No Content` on success (even if there was no like).
 - **Status**: `400 Bad Request` if author cannot be resolved.
-- **Status**: `404 Not Found` if the entry or comment does not exist or does not match the path.
+- **Status**: `404 Not Found` if the entry or comment does not exist, is hidden from the caller, or does not match the path.
 
 ### UI: Comment Like/Unlike
 
 Each comment on the entry detail page shows:
 - The total like count (e.g. "3 likes").
 - A **Like** or **Unlike** button (depending on whether the current user has already liked it).
+- On `FRIENDS` entries, the rendered comment list uses the same visibility rule as the API.
 
 HTML endpoints:
 - `POST /authors/{AUTHOR_SERIAL}/entries/{ENTRY_SERIAL}/comments/{COMMENT_SERIAL}/like/` – like a comment, redirects back to entry detail.

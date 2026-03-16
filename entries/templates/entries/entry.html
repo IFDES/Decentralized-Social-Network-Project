@@ -19,7 +19,7 @@
             <a href="{% url 'entries:entry-edit' author.uuid entry.uuid %}" role="menuitem">Edit</a>
             <a href="{% url 'entries:entry-delete' author.uuid entry.uuid %}" class="dropdown-danger" role="menuitem">Delete</a>
           {% endif %}
-          <button class="entry-share-btn" data-share-url="{% url 'entries:entry-detail' author.uuid entry.uuid %}" role="menuitem">Share</button>
+          <button class="entry-share-btn" data-share-url="{% if shareable_link %}{{ shareable_link }}{% else %}{% url 'entries:entry-detail' author.uuid entry.uuid %}{% endif %}" role="menuitem">Share</button>
         </div>
       </div>
     </div>
