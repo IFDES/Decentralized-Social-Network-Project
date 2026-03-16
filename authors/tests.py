@@ -50,6 +50,19 @@ class AuthorProfileTests(TestCase):
         self.assertEqual(payload["id"], self.author.fqid)
         self.assertEqual(payload["github"], "https://github.com/alice")
 
+    def test_api_get_authors_list(self):
+        response = self.client.get(reverse("authors:authors-api"), {"page": 1, "size": 10})
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["type"], "authors")
+        self.assertEqual(payload["page_number"], 1)
+        self.assertEqual(payload["size"], 10)
+        self.assertEqual(payload["count"], 2)
+        self.assertEqual(len(payload["authors"]), 2)
+        returned_names = {author["displayName"] for author in payload["authors"]}
+        self.assertEqual(returned_names, {"Alice", "Bob"})
+
     def test_api_put_updates_local_author(self):
         self.client.login(username="alice_u", password="passA12345")
         response = self.client.put(
@@ -134,6 +147,51 @@ class SignupTests(TestCase):
 
         account = AuthorAccount.objects.get(user=user)
         self.assertEqual(account.author.display_name, "New User")
+
+    def test_api_signup_creates_inactive_user_and_author(self):
+        response = self.client.post(
+            reverse("authors:authors-api"),
+            data=json.dumps(
+                {
+                    "username": "apiuser",
+                    "displayName": "API User",
+                    "password1": "strongPass99",
+                    "password2": "strongPass99",
+                    "github": "https://github.com/apiuser",
+                    "profileImage": "https://example.com/apiuser.png",
+                    "description": "Created through the API",
+                }
+            ),
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 201)
+        payload = response.json()
+        self.assertTrue(payload["pendingApproval"])
+        self.assertEqual(payload["author"]["displayName"], "API User")
+
+        user = User.objects.get(username="apiuser")
+        self.assertFalse(user.is_active)
+        account = AuthorAccount.objects.get(user=user)
+        self.assertEqual(account.author.github, "https://github.com/apiuser")
+
+    def test_api_signup_rejects_invalid_payload(self):
+        response = self.client.post(
+            reverse("authors:authors-api"),
+            data=json.dumps(
+                {
+                    "username": "badapiuser",
+                    "displayName": "Bad API User",
+                    "password1": "strongPass99",
+                    "password2": "differentPass",
+                }
+            ),
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("errors", response.json())
+        self.assertFalse(User.objects.filter(username="badapiuser").exists())
 
     def test_inactive_user_cannot_login(self):
         self.client.post(

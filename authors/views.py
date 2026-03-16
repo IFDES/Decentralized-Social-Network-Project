@@ -45,6 +45,29 @@ def _author_to_dict(request: HttpRequest, author: Author) -> dict:
     }
 
 
+def _paginate_queryset(request: HttpRequest, queryset):
+    try:
+        page_number = int(request.GET.get("page", "1"))
+    except ValueError:
+        page_number = 1
+
+    try:
+        size = int(request.GET.get("size", "10"))
+    except ValueError:
+        size = 10
+
+    if page_number < 1:
+        page_number = 1
+    if size < 1:
+        size = 10
+
+    total_count = queryset.count()
+    start = (page_number - 1) * size
+    end = start + size
+    page_items = list(queryset[start:end])
+    return page_number, size, total_count, page_items
+
+
 def _get_current_author(request: HttpRequest) -> Author | None:
     user = getattr(request, "user", None)
     if not user or not getattr(user, "is_authenticated", False):
@@ -138,6 +161,60 @@ def author_profile_page(request: HttpRequest, author_id: UUID):
             "is_friend": is_friend,
             "github_entries": github_entries,
         },
+    )
+
+
+@csrf_exempt
+@require_http_methods(["GET", "POST"])
+def authors_api(request: HttpRequest):
+    if request.method == "GET":
+        queryset = Author.objects.filter(is_deleted=False).order_by("-created_at", "-uuid")
+        page_number, size, count, page_items = _paginate_queryset(request, queryset)
+        return JsonResponse(
+            {
+                "type": "authors",
+                "page_number": page_number,
+                "size": size,
+                "count": count,
+                "authors": [_author_to_dict(request, author) for author in page_items],
+            }
+        )
+
+    try:
+        payload = json.loads(request.body.decode("utf-8") or "{}")
+    except json.JSONDecodeError:
+        return HttpResponseBadRequest("Invalid JSON body.")
+
+    form = SignupForm(
+        {
+            "username": payload.get("username", ""),
+            "display_name": payload.get("displayName", payload.get("display_name", "")),
+            "password1": payload.get("password1", ""),
+            "password2": payload.get("password2", ""),
+        }
+    )
+    if not form.is_valid():
+        return JsonResponse({"errors": form.errors}, status=400)
+
+    user = User.objects.create_user(
+        username=form.cleaned_data["username"],
+        password=form.cleaned_data["password1"],
+        is_active=False,
+    )
+    author = Author.objects.create(
+        display_name=form.cleaned_data["display_name"],
+        github=payload.get("github", ""),
+        profile_image=payload.get("profileImage", payload.get("profile_image", "")),
+        description=payload.get("description", ""),
+    )
+    AuthorAccount.objects.create(user=user, author=author)
+
+    return JsonResponse(
+        {
+            "pendingApproval": True,
+            "author": _author_to_dict(request, author),
+        },
+        status=201,
     )
 
 
