@@ -39,13 +39,16 @@
             </a>
           </li>
         </ul>
-        <form action="{% url 'logout' %}" method="post" class="sidebar__logout-form">
-          {% csrf_token %}
-          <button type="submit" class="sidebar__link sidebar__logout-button">
-            <img src="{% static 'icons/Logout.svg' %}" alt="Logout" class="sidebar__icon">
-            <span>Logout</span>
-          </button>
-        </form>
+
+        <div class="sidebar__bottom">
+          <form action="{% url 'logout' %}" method="post" class="sidebar__logout-form">
+            {% csrf_token %}
+            <button type="submit" class="sidebar__link sidebar__logout-button">
+              <img src="{% static 'icons/Logout.svg' %}" alt="Logout" class="sidebar__icon">
+              <span>Logout</span>
+            </button>
+          </form>
+        </div>
       </nav>
 
       <main class="content">
