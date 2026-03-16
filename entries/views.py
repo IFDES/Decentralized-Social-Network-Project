@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from uuid import UUID
 
 from django.conf import settings
+from django.contrib.auth.decorators import login_required
 from django.db.models import Count, Q
 from django.http import (
     HttpRequest,
@@ -283,6 +284,7 @@ def _stream_entries_queryset(request: HttpRequest | None = None):
 # ---------------------------------------------------------------------------
 
 
+@login_required
 @require_http_methods(["GET"])
 def stream_page(request: HttpRequest) -> HttpResponse:
     entries = list(_stream_entries_queryset(request))
