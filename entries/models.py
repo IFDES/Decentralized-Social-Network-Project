@@ -119,6 +119,14 @@ class Entry(models.Model):
         default=VISIBILITY_PUBLIC,
     )
 
+    external_id = models.CharField(
+        max_length=255,
+        null=True,
+        blank=True,
+        unique=True,
+        help_text="External ID for deduplication (e.g. GitHub event ID).",
+    )
+
     is_deleted = models.BooleanField(default=False)
     deleted_at = models.DateTimeField(null=True, blank=True)
 

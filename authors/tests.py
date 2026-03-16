@@ -206,4 +206,138 @@ class LogoutTests(TestCase):
     def test_logout_clears_session(self):
         self.client.post("/accounts/logout/")
         response = self.client.get("/follows/ui")
-        self.assertEqual(response.status_code, 302)  
+        self.assertEqual(response.status_code, 302)
+
+
+class GitHubActivityTests(TestCase):
+    """Tests for GitHub activity sync and API endpoint."""
+
+    def setUp(self):
+        self.client = Client()
+        self.author = Author.objects.create(
+            display_name="GitHub User",
+            github="https://github.com/octocat",
+            is_local=True,
+        )
+        self.no_github_author = Author.objects.create(
+            display_name="No GitHub",
+            github="",
+            is_local=True,
+        )
+        self.owner_user = User.objects.create_user(username="ghuser", password="passGH123")
+        AuthorAccount.objects.create(user=self.owner_user, author=self.author)
+
+    def test_extract_github_username(self):
+        from authors.github_activity import _extract_github_username
+        self.assertEqual(_extract_github_username("https://github.com/octocat"), "octocat")
+        self.assertEqual(_extract_github_username("https://github.com/octocat/"), "octocat")
+        self.assertEqual(_extract_github_username("http://github.com/alice"), "alice")
+        self.assertIsNone(_extract_github_username(""))
+        self.assertIsNone(_extract_github_username("https://example.com/foo"))
+
+    def test_event_to_summary_push(self):
+        from authors.github_activity import _event_to_summary
+        event = {
+            "type": "PushEvent",
+            "repo": {"name": "octocat/Hello-World"},
+            "payload": {
+                "commits": [
+                    {"message": "Initial commit"},
+                    {"message": "Add README"},
+                ]
+            }
+        }
+        summary = _event_to_summary(event)
+        self.assertIn("Pushed 2 commit(s)", summary)
+        self.assertIn("octocat/Hello-World", summary)
+
+    def test_event_to_summary_star(self):
+        from authors.github_activity import _event_to_summary
+        event = {
+            "type": "WatchEvent",
+            "repo": {"name": "django/django"},
+            "payload": {}
+        }
+        self.assertEqual(_event_to_summary(event), "Starred django/django")
+
+    def test_sync_deduplication(self):
+        """Syncing the same events twice should not create duplicate entries."""
+        from entries.models import Entry
+        from unittest.mock import patch
+
+        fake_events = [
+            {
+                "id": "111",
+                "type": "PushEvent",
+                "repo": {"name": "octocat/Hello-World"},
+                "payload": {"commits": [{"message": "first"}]},
+                "created_at": "2026-03-15T10:00:00Z",
+            },
+            {
+                "id": "222",
+                "type": "WatchEvent",
+                "repo": {"name": "django/django"},
+                "payload": {},
+                "created_at": "2026-03-15T11:00:00Z",
+            },
+        ]
+
+        with patch("authors.github_activity.fetch_github_events", return_value=fake_events):
+            from authors.github_activity import sync_github_activity
+            first_run = sync_github_activity(self.author)
+            self.assertEqual(len(first_run), 2)
+
+            second_run = sync_github_activity(self.author)
+            self.assertEqual(len(second_run), 0, "Should not create duplicates")
+
+        total = Entry.objects.filter(author=self.author, external_id__startswith="github-").count()
+        self.assertEqual(total, 2)
+
+    def test_sync_no_github_url(self):
+        from authors.github_activity import sync_github_activity
+        result = sync_github_activity(self.no_github_author)
+        self.assertEqual(result, [])
+
+    def test_github_activity_api_no_github(self):
+        """API returns empty events for author without GitHub URL."""
+        url = reverse("authors:github_activity_api", args=[self.no_github_author.uuid])
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["type"], "github_activity")
+        self.assertEqual(payload["events"], [])
+
+    def test_github_activity_api_returns_events(self):
+        """API endpoint syncs and returns GitHub events."""
+        from unittest.mock import patch
+        fake_events = [
+            {
+                "id": "333",
+                "type": "CreateEvent",
+                "repo": {"name": "octocat/new-repo"},
+                "payload": {"ref_type": "repository"},
+                "created_at": "2026-03-15T12:00:00Z",
+            },
+        ]
+
+        with patch("authors.github_activity.fetch_github_events", return_value=fake_events):
+            url = reverse("authors:github_activity_api", args=[self.author.uuid])
+            response = self.client.get(url)
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["type"], "github_activity")
+        self.assertGreaterEqual(len(payload["events"]), 1)
+        self.assertEqual(payload["events"][0]["id"], "github-333")
+
+    def test_profile_page_shows_github_section(self):
+        """Profile page template includes the GitHub Activity section when author has a GitHub URL."""
+        response = self.client.get(reverse("authors:profile", args=[self.author.uuid]))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "GitHub Activity")
+
+    def test_profile_page_no_github_section_without_url(self):
+        """Profile page does not show GitHub section when author has no GitHub URL."""
+        response = self.client.get(reverse("authors:profile", args=[self.no_github_author.uuid]))
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, "GitHub Activity")
