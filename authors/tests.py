@@ -192,6 +192,21 @@ class SignupTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "already exists")
 
+    def test_signup_missing_display_name(self):
+        """Missing required display_name should keep the user on the form with errors."""
+        response = self.client.post(
+            reverse("signup"),
+            data={
+                "username": "nodisplay",
+                "display_name": "",
+                "password1": "strongPass99",
+                "password2": "strongPass99",
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        # The form should not create a user when a required field is missing.
+        self.assertFalse(User.objects.filter(username="nodisplay").exists())
+
 
 class LogoutTests(TestCase):
     def setUp(self):

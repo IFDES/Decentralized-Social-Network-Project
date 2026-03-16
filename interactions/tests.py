@@ -244,6 +244,33 @@ class CommentLikesApiTests(TestCase):
         )
         self.assertEqual(response.status_code, 400)
 
+    def test_comment_likes_nonexistent_comment_returns_404(self):
+        """Liking a non-existent comment should return 404."""
+        url = reverse(
+            "entries:comment-likes-api",
+            args=[self.entry_author.uuid, self.entry.uuid, "00000000-0000-0000-0000-000000000000"],
+        )
+        response = self.client.post(
+            url,
+            data=json.dumps({"authorId": str(self.liker.uuid)}),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 404)
+
+    def test_comment_likes_wrong_entry_returns_404(self):
+        """Liking a comment with the wrong entry id in the path should return 404."""
+        other_entry = Entry.objects.create(author=self.entry_author, content="Other")
+        url = reverse(
+            "entries:comment-likes-api",
+            args=[self.entry_author.uuid, other_entry.uuid, self.comment.uuid],
+        )
+        response = self.client.post(
+            url,
+            data=json.dumps({"authorId": str(self.liker.uuid)}),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 404)
+
 
 class CommentLikeUITests(TestCase):
     def setUp(self):

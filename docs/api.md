@@ -708,7 +708,40 @@ Comment likes are per (author, comment); at most one like per author per comment
 
 #### Response
 
-- **Status**: `201 Created` when a new like is created, or `200 OK` when the like already existed. Body is the like object. `400 Bad Request` if author cannot be resolved.
+- **Status**: `201 Created` when a new like is created.
+- **Status**: `200 OK` when the like already existed (idempotent).
+- **Status**: `400 Bad Request` if author cannot be resolved.
+- **Status**: `404 Not Found` if the entry or comment does not exist or does not match the path.
+
+##### Example request
+
+```http
+POST /api/authors/{AUTHOR_SERIAL}/entries/{ENTRY_SERIAL}/comments/{COMMENT_SERIAL}/likes
+Content-Type: application/json
+
+{
+  "authorId": "8d35d13e-f0ee-468d-bd6f-f942ec660f43"
+}
+```
+
+##### Example response (201 Created)
+
+```json
+{
+  "type": "like",
+  "author": {
+    "type": "author",
+    "id": "http://127.0.0.1:8000/api/authors/8d35d13e-f0ee-468d-bd6f-f942ec660f43",
+    "displayName": "Liker",
+    "web": "http://127.0.0.1:8000/authors/8d35d13e-f0ee-468d-bd6f-f942ec660f43",
+    "github": "",
+    "profileImage": ""
+  },
+  "published": "2026-03-01T12:00:00+00:00",
+  "id": "http://127.0.0.1:8000/api/authors/8d35d13e-f0ee-468d-bd6f-f942ec660f43/liked/123e4567-e89b-12d3-a456-426614174000",
+  "object": "http://127.0.0.1:8000/api/authors/.../commented/{COMMENT_SERIAL}"
+}
+```
 
 ### DELETE /api/authors/{AUTHOR_SERIAL}/entries/{ENTRY_SERIAL}/comments/{COMMENT_SERIAL}/likes
 
@@ -718,7 +751,9 @@ Comment likes are per (author, comment); at most one like per author per comment
 
 #### Response
 
-- **Status**: `204 No Content` on success. `400 Bad Request` if author cannot be resolved.
+- **Status**: `204 No Content` on success (even if there was no like).
+- **Status**: `400 Bad Request` if author cannot be resolved.
+- **Status**: `404 Not Found` if the entry or comment does not exist or does not match the path.
 
 ### UI: Comment Like/Unlike
 
@@ -772,10 +807,36 @@ Admin sets is_active=True    -> user can now login
 POST /accounts/login/        -> 302 redirect to follows/ui
 ```
 
+#### Example request
+
+```http
+POST /accounts/signup/
+Content-Type: application/x-www-form-urlencoded
+
+username=newuser&display_name=New%20User&password1=strongPass99&password2=strongPass99
+```
+
+#### Example response
+
+- **Status**: `200 OK` – the signup form is re-rendered as a "pending approval" page.
+- **Body**: HTML page containing text like:
+
+```html
+<h1>Account Created</h1>
+<p>Your account has been created and is pending admin approval.</p>
+```
+
 #### Error responses
 
-- Duplicate username: re-renders form with "A user with that username already exists."
-- Mismatched passwords: re-renders form with "Passwords do not match."
+- **Duplicate username**: re-renders form with "A user with that username already exists."
+- **Mismatched passwords**: re-renders form with "Passwords do not match."
+- **Missing required fields** (e.g., `display_name`): re-renders form with appropriate validation errors and does **not** create a user.
+
+#### Status codes
+
+| Status      | Meaning                                                      |
+|------------|--------------------------------------------------------------|
+| `200 OK`   | Form rendered (initial, success pending approval, or errors) |
 
 ---
 
