@@ -95,9 +95,12 @@ class FollowRelationship(models.Model):
     @staticmethod
     def are_friends(a, b) -> bool:
         """
-        True only if both directions are APPROVED.
+        True only if both directions are APPROVED and neither author is deleted.
         """
         if not a or not b:
+            return False
+
+        if getattr(a, "is_deleted", False) or getattr(b, "is_deleted", False):
             return False
 
         if a.pk == b.pk:

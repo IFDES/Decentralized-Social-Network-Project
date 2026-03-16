@@ -638,3 +638,315 @@ class EntryVisibilityTests(TestCase):
         self.assertEqual(response.status_code, 200)
         ids = [item["id"] for item in response.json()["src"]]
         self.assertIn(str(friends_entry.fqid), ids)
+
+class EntryDetailAccessTests(TestCase):
+    def setUp(self):
+        self.client = Client()
+
+        self.author = Author.objects.create(display_name="Alice")
+        self.friend = Author.objects.create(display_name="Bob")
+        self.follower = Author.objects.create(display_name="Carol")
+        self.stranger = Author.objects.create(display_name="Eve")
+
+        self.author_user = User.objects.create_user(username="alice_u", password="passA12345")
+        self.friend_user = User.objects.create_user(username="bob_u", password="passB12345")
+        self.follower_user = User.objects.create_user(username="carol_u", password="passC12345")
+        self.stranger_user = User.objects.create_user(username="eve_u", password="passD12345")
+        self.admin_user = User.objects.create_user(
+            username="admin_u",
+            password="passAdmin12345",
+            is_staff=True,
+        )
+
+        AuthorAccount.objects.create(user=self.author_user, author=self.author)
+        AuthorAccount.objects.create(user=self.friend_user, author=self.friend)
+        AuthorAccount.objects.create(user=self.follower_user, author=self.follower)
+        AuthorAccount.objects.create(user=self.stranger_user, author=self.stranger)
+
+        # mutual friendship: author <-> friend
+        FollowRelationship.objects.create(
+            follower=self.author,
+            followee=self.friend,
+            status=FollowRelationship.Status.APPROVED,
+        )
+        FollowRelationship.objects.create(
+            follower=self.friend,
+            followee=self.author,
+            status=FollowRelationship.Status.APPROVED,
+        )
+
+        # follower only: follower -> author
+        FollowRelationship.objects.create(
+            follower=self.follower,
+            followee=self.author,
+            status=FollowRelationship.Status.APPROVED,
+        )
+
+    def test_public_entry_detail_api_viewable_by_anyone_with_link(self):
+        entry = Entry.objects.create(
+            author=self.author,
+            title="Public",
+            content="Public body",
+            visibility=Entry.VISIBILITY_PUBLIC,
+        )
+        url = reverse("entries:entry-detail-api", args=[self.author.uuid, entry.uuid])
+
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["content"], "Public body")
+
+    def test_unlisted_entry_detail_api_viewable_by_anyone_with_link(self):
+        entry = Entry.objects.create(
+            author=self.author,
+            title="Unlisted",
+            content="Unlisted body",
+            visibility=Entry.VISIBILITY_UNLISTED,
+        )
+        url = reverse("entries:entry-detail-api", args=[self.author.uuid, entry.uuid])
+
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["content"], "Unlisted body")
+
+    def test_friends_only_entry_detail_api_forbidden_for_follower_who_is_not_friend(self):
+        entry = Entry.objects.create(
+            author=self.author,
+            title="Friends",
+            content="Friends body",
+            visibility=Entry.VISIBILITY_FRIENDS,
+        )
+        url = reverse("entries:entry-detail-api", args=[self.author.uuid, entry.uuid])
+
+        self.client.login(username="carol_u", password="passC12345")
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 403)
+
+    def test_friends_only_entry_detail_api_viewable_by_friend(self):
+        entry = Entry.objects.create(
+            author=self.author,
+            title="Friends",
+            content="Friends body",
+            visibility=Entry.VISIBILITY_FRIENDS,
+        )
+        url = reverse("entries:entry-detail-api", args=[self.author.uuid, entry.uuid])
+
+        self.client.login(username="bob_u", password="passB12345")
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["content"], "Friends body")
+
+    def test_friends_only_entry_detail_api_viewable_by_owner(self):
+        entry = Entry.objects.create(
+            author=self.author,
+            title="Friends",
+            content="Owner body",
+            visibility=Entry.VISIBILITY_FRIENDS,
+        )
+        url = reverse("entries:entry-detail-api", args=[self.author.uuid, entry.uuid])
+
+        self.client.login(username="alice_u", password="passA12345")
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["content"], "Owner body")
+
+    def test_deleted_entry_detail_api_visible_only_to_admin(self):
+        entry = Entry.objects.create(
+            author=self.author,
+            title="Deleted",
+            content="Deleted body",
+            visibility=Entry.VISIBILITY_PUBLIC,
+        )
+        entry.is_deleted = True
+        entry.visibility = Entry.VISIBILITY_DELETED
+        entry.deleted_at = datetime.now(timezone.utc)
+        entry.save()
+
+        url = reverse("entries:entry-detail-api", args=[self.author.uuid, entry.uuid])
+
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 403)
+
+        self.client.login(username="alice_u", password="passA12345")
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 403)
+        self.client.logout()
+
+        self.client.login(username="admin_u", password="passAdmin12345")
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["visibility"], Entry.VISIBILITY_DELETED)
+
+class AuthorEntriesVisibilityTests(TestCase):
+    def setUp(self):
+        self.client = Client()
+
+        self.author = Author.objects.create(display_name="Alice")
+        self.friend = Author.objects.create(display_name="Bob")
+        self.follower = Author.objects.create(display_name="Carol")
+        self.stranger = Author.objects.create(display_name="Eve")
+
+        self.author_user = User.objects.create_user(username="alice_list", password="passA12345")
+        self.friend_user = User.objects.create_user(username="bob_list", password="passB12345")
+        self.follower_user = User.objects.create_user(username="carol_list", password="passC12345")
+
+        AuthorAccount.objects.create(user=self.author_user, author=self.author)
+        AuthorAccount.objects.create(user=self.friend_user, author=self.friend)
+        AuthorAccount.objects.create(user=self.follower_user, author=self.follower)
+
+        FollowRelationship.objects.create(
+            follower=self.author,
+            followee=self.friend,
+            status=FollowRelationship.Status.APPROVED,
+        )
+        FollowRelationship.objects.create(
+            follower=self.friend,
+            followee=self.author,
+            status=FollowRelationship.Status.APPROVED,
+        )
+        FollowRelationship.objects.create(
+            follower=self.follower,
+            followee=self.author,
+            status=FollowRelationship.Status.APPROVED,
+        )
+
+        self.public_entry = Entry.objects.create(
+            author=self.author,
+            title="Public entry",
+            content="Public",
+            visibility=Entry.VISIBILITY_PUBLIC,
+        )
+        self.unlisted_entry = Entry.objects.create(
+            author=self.author,
+            title="Unlisted entry",
+            content="Unlisted",
+            visibility=Entry.VISIBILITY_UNLISTED,
+        )
+        self.friends_entry = Entry.objects.create(
+            author=self.author,
+            title="Friends entry",
+            content="Friends",
+            visibility=Entry.VISIBILITY_FRIENDS,
+        )
+
+    def test_author_entries_api_for_stranger_shows_public_only(self):
+        url = reverse("entries:author-entries-api", args=[self.author.uuid])
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+
+        titles = [item["title"] for item in response.json()["src"]]
+        self.assertIn("Public entry", titles)
+        self.assertNotIn("Unlisted entry", titles)
+        self.assertNotIn("Friends entry", titles)
+
+    def test_author_entries_api_for_follower_shows_public_and_unlisted(self):
+        self.client.login(username="carol_list", password="passC12345")
+        url = reverse("entries:author-entries-api", args=[self.author.uuid])
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+
+        titles = [item["title"] for item in response.json()["src"]]
+        self.assertIn("Public entry", titles)
+        self.assertIn("Unlisted entry", titles)
+        self.assertNotIn("Friends entry", titles)
+
+    def test_author_entries_api_for_friend_shows_public_unlisted_and_friends(self):
+        self.client.login(username="bob_list", password="passB12345")
+        url = reverse("entries:author-entries-api", args=[self.author.uuid])
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+
+        titles = [item["title"] for item in response.json()["src"]]
+        self.assertIn("Public entry", titles)
+        self.assertIn("Unlisted entry", titles)
+        self.assertIn("Friends entry", titles)
+class EntryShareLinkTemplateTests(TestCase):
+    def setUp(self):
+        self.client = Client()
+        self.author = Author.objects.create(display_name="Share Author")
+
+    def test_public_entry_detail_page_shows_shareable_link(self):
+        entry = Entry.objects.create(
+            author=self.author,
+            title="Public share",
+            content="Body",
+            visibility=Entry.VISIBILITY_PUBLIC,
+        )
+        url = reverse("entries:entry-detail", args=[self.author.uuid, entry.uuid])
+
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, str(entry.web))
+
+    def test_unlisted_entry_detail_page_shows_shareable_link(self):
+        entry = Entry.objects.create(
+            author=self.author,
+            title="Unlisted share",
+            content="Body",
+            visibility=Entry.VISIBILITY_UNLISTED,
+        )
+        url = reverse("entries:entry-detail", args=[self.author.uuid, entry.uuid])
+
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, str(entry.web))
+
+    def test_friends_only_entry_detail_page_does_not_show_shareable_link(self):
+        entry = Entry.objects.create(
+            author=self.author,
+            title="Friends no share",
+            content="Body",
+            visibility=Entry.VISIBILITY_FRIENDS,
+        )
+        url = reverse("entries:entry-detail", args=[self.author.uuid, entry.uuid])
+
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 403)
+    
+        def test_friends_only_entry_detail_page_for_owner_does_not_show_shareable_link(self):
+        owner_user = User.objects.create_user(username="share_owner", password="passA12345")
+        AuthorAccount.objects.create(user=owner_user, author=self.author)
+
+        entry = Entry.objects.create(
+            author=self.author,
+            title="Friends no share owner",
+            content="Body",
+            visibility=Entry.VISIBILITY_FRIENDS,
+        )
+        url = reverse("entries:entry-detail", args=[self.author.uuid, entry.uuid])
+
+        self.client.login(username="share_owner", password="passA12345")
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, str(entry.web))
+
+class HostedImageVisibilityTests(TestCase):
+    def setUp(self):
+        self.client = Client()
+
+        self.author = Author.objects.create(display_name="Img Owner")
+        self.friend = Author.objects.create(display_name="Img Friend")
+        self.follower = Author.objects.create(display_name="Img Follower")
+
+        self.author_user = User.objects.create_user(username="img_owner", password="passA12345")
+        self.friend_user = User.objects.create_user(username="img_friend", password="passB12345")
+        self.follower_user = User.objects.create_user(username="img_follower", password="passC12345")
+        self.admin_user = User.objects.create_user(
+            username="img_admin",
+            password="passAdmin12345",
+            is_staff=True,
+        )
+
+        AuthorAccount.objects.create(user=self.author_user, author=self.author)
+        AuthorAccount.objects.create(user=self.friend_user, author=self.friend)
+        AuthorAccount.objects.create(user=self.follower_user, author=self.follower)
+
+        FollowRelationship.objects.create(
+            follower=self.author,
+            followee=self.friend,
+            status=FollowRelationship.Status.APPROVED,
+        )
+        FollowRelationship.objects.create(
+            follower=self.friend,
+            followee=self.author,
+            status=FollowRelationship.Status.APPROVED,
+        )

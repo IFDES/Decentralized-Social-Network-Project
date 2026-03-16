@@ -227,6 +227,7 @@ def following_list(request: HttpRequest, author_serial):
         follower=me,
         # status field, lookup type = in like in SQL WHERE status IN ('PENDING', 'APPROVED')
         status__in=[FollowRelationship.Status.PENDING, FollowRelationship.Status.APPROVED],
+        followee__is_deleted=False,
     ).select_related("followee")
 
     following_list = []
@@ -327,6 +328,7 @@ def followers_list(request: HttpRequest, author_serial):
     rels = FollowRelationship.objects.filter(
         followee=me,
         status=FollowRelationship.Status.APPROVED,
+        follower__is_deleted=False,
     ).select_related("follower")
 
     followers_list = []

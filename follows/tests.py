@@ -245,3 +245,153 @@ class FollowEdgeCaseTests(TestCase):
         url = f"/api/authors/{self.a_uuid}/followers/{self.nonexistent_fqid}"
         resp = self.client.delete(url)
         self.assertEqual(resp.status_code, 404, resp.content)
+
+class FollowDeletedAuthorTests(TestCase):
+    def setUp(self):
+        self.client = Client()
+
+        self.author_a = Author.objects.create(
+            display_name="UserA",
+            fqid="http://127.0.0.1:8000/api/authors/a",
+            host="http://127.0.0.1:8000/api/",
+            web="http://127.0.0.1:8000/authors/a",
+            is_local=True,
+        )
+        self.author_b = Author.objects.create(
+            display_name="UserB",
+            fqid="http://127.0.0.1:8000/api/authors/b",
+            host="http://127.0.0.1:8000/api/",
+            web="http://127.0.0.1:8000/authors/b",
+            is_local=True,
+        )
+
+        self.user_a = User.objects.create_user(username="UserA_deleted", password="passA12345")
+        self.user_b = User.objects.create_user(username="UserB_deleted", password="passB12345")
+        AuthorAccount.objects.create(user=self.user_a, author=self.author_a)
+        AuthorAccount.objects.create(user=self.user_b, author=self.author_b)
+
+        self.a_uuid = str(self.author_a.uuid)
+        self.b_uuid = str(self.author_b.uuid)
+        self.enc_a_fqid = enc(self.author_a.fqid)
+        self.enc_b_fqid = enc(self.author_b.fqid)
+
+    def test_follow_deleted_author_returns_404(self):
+        self.author_b.is_deleted = True
+        self.author_b.save(update_fields=["is_deleted"])
+
+        self.client.login(username="UserA_deleted", password="passA12345")
+        url = f"/api/authors/{self.a_uuid}/following/{self.enc_b_fqid}"
+        resp = self.client.put(url, content_type="application/json")
+
+        self.assertEqual(resp.status_code, 404, resp.content)
+        self.assertFalse(
+            FollowRelationship.objects.filter(
+                follower=self.author_a,
+                followee=self.author_b,
+            ).exists()
+        )
+
+    def test_unfollow_deleted_author_returns_404(self):
+        self.author_b.is_deleted = True
+        self.author_b.save(update_fields=["is_deleted"])
+
+        self.client.login(username="UserA_deleted", password="passA12345")
+        url = f"/api/authors/{self.a_uuid}/following/{self.enc_b_fqid}"
+        resp = self.client.delete(url)
+
+        self.assertEqual(resp.status_code, 404, resp.content)
+
+    def test_check_following_deleted_author_returns_404(self):
+        self.author_b.is_deleted = True
+        self.author_b.save(update_fields=["is_deleted"])
+
+        self.client.login(username="UserA_deleted", password="passA12345")
+        url = f"/api/authors/{self.a_uuid}/following/{self.enc_b_fqid}"
+        resp = self.client.get(url)
+
+        self.assertEqual(resp.status_code, 404, resp.content)
+
+    def test_accept_deleted_follower_returns_404(self):
+        FollowRelationship.objects.create(
+            follower=self.author_a,
+            followee=self.author_b,
+            status=FollowRelationship.Status.PENDING,
+        )
+
+        self.author_a.is_deleted = True
+        self.author_a.save(update_fields=["is_deleted"])
+
+        self.client.login(username="UserB_deleted", password="passB12345")
+        url = f"/api/authors/{self.b_uuid}/followers/{self.enc_a_fqid}"
+        resp = self.client.put(url, content_type="application/json")
+
+        self.assertEqual(resp.status_code, 404, resp.content)
+
+    def test_deny_deleted_follower_returns_404(self):
+        FollowRelationship.objects.create(
+            follower=self.author_a,
+            followee=self.author_b,
+            status=FollowRelationship.Status.PENDING,
+        )
+
+        self.author_a.is_deleted = True
+        self.author_a.save(update_fields=["is_deleted"])
+
+        self.client.login(username="UserB_deleted", password="passB12345")
+        url = f"/api/authors/{self.b_uuid}/followers/{self.enc_a_fqid}"
+        resp = self.client.delete(url)
+
+        self.assertEqual(resp.status_code, 404, resp.content)
+
+    def test_deleted_author_not_listed_as_friend(self):
+        FollowRelationship.objects.create(
+            follower=self.author_a,
+            followee=self.author_b,
+            status=FollowRelationship.Status.APPROVED,
+        )
+        FollowRelationship.objects.create(
+            follower=self.author_b,
+            followee=self.author_a,
+            status=FollowRelationship.Status.APPROVED,
+        )
+
+        self.author_b.is_deleted = True
+        self.author_b.save(update_fields=["is_deleted"])
+
+        friends = list(FollowRelationship.friends_of(self.author_a))
+        self.assertNotIn(self.author_b, friends)
+
+    def test_are_friends_with_deleted_author_is_false(self):
+        FollowRelationship.objects.create(
+            follower=self.author_a,
+            followee=self.author_b,
+            status=FollowRelationship.Status.APPROVED,
+        )
+        FollowRelationship.objects.create(
+            follower=self.author_b,
+            followee=self.author_a,
+            status=FollowRelationship.Status.APPROVED,
+        )
+
+        self.author_b.is_deleted = True
+        self.author_b.save(update_fields=["is_deleted"])
+
+        self.assertFalse(FollowRelationship.are_friends(self.author_a, self.author_b))
+    
+    def test_followers_list_excludes_deleted_followers(self):
+        FollowRelationship.objects.create(
+            follower=self.author_a,
+            followee=self.author_b,
+            status=FollowRelationship.Status.APPROVED,
+        )
+
+        self.author_a.is_deleted = True
+        self.author_a.save(update_fields=["is_deleted"])
+
+        self.client.login(username="UserB_deleted", password="passB12345")
+        resp = self.client.get(f"/api/authors/{self.b_uuid}/followers")
+        self.assertEqual(resp.status_code, 200)
+
+        followers = resp.json()["followers"]
+        returned_ids = [item["id"] for item in followers]
+        self.assertNotIn(self.author_a.fqid, returned_ids)
