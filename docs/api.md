@@ -1,7 +1,7 @@
 ## API Overview
 
 - **Base URL (local dev)**: `http://127.0.0.1:8000`
-- **Base URL (deployed)**: Heroku App
+- **Base URL (deployed Heroku App)**: "https://garr-distributedsocial-9837ac888a84.herokuapp.com/admin"
 - **API prefix**: all API paths below are relative to `{BASE_URL}` (whether it is from local dev, or heroku app)
 - **Authentication**:
   - **Local** (browser / same node): Django session (login form) or whatever the team chooses.

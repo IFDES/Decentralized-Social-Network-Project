@@ -5,7 +5,7 @@ from django.test import TestCase, Client
 
 from authors.models import Author, AuthorAccount
 from follows.models import FollowRelationship
-
+from django.urls import reverse
 
 # Percent-encode an FQID so it can be placed in the URL path
 def enc(url: str) -> str:
@@ -395,3 +395,57 @@ class FollowDeletedAuthorTests(TestCase):
         followers = resp.json()["followers"]
         returned_ids = [item["id"] for item in followers]
         self.assertNotIn(self.author_a.fqid, returned_ids)
+
+class FollowUiPageTests(TestCase):
+    def setUp(self):
+        self.client = Client()
+
+        self.author_a = Author.objects.create(
+            display_name="UserA",
+            fqid="http://127.0.0.1:8000/api/authors/a",
+            host="http://127.0.0.1:8000/api/",
+            web="http://127.0.0.1:8000/authors/a",
+            is_local=True,
+        )
+        self.author_b = Author.objects.create(
+            display_name="UserB",
+            fqid="http://127.0.0.1:8000/api/authors/b",
+            host="http://127.0.0.1:8000/api/",
+            web="http://127.0.0.1:8000/authors/b",
+            is_local=True,
+        )
+
+        self.user_a = User.objects.create_user(username="UserA_ui", password="passA12345")
+        self.user_b = User.objects.create_user(username="UserB_ui", password="passB12345")
+
+        AuthorAccount.objects.create(user=self.user_a, author=self.author_a)
+        AuthorAccount.objects.create(user=self.user_b, author=self.author_b)
+
+    def test_follow_ui_shows_approved_followers_column(self):
+        FollowRelationship.objects.create(
+            follower=self.author_b,
+            followee=self.author_a,
+            status=FollowRelationship.Status.APPROVED,
+        )
+
+        self.client.login(username="UserA_ui", password="passA12345")
+        response = self.client.get("/follows/")  # change this if your UI route differs
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Authors who follow you")
+        self.assertContains(response, "UserB")
+        self.assertContains(response, "follower")
+    
+    def test_follow_ui_does_not_list_pending_requests_as_approved_followers(self):
+        FollowRelationship.objects.create(
+            follower=self.author_b,
+            followee=self.author_a,
+            status=FollowRelationship.Status.PENDING,
+        )
+
+        self.client.login(username="UserA_ui", password="passA12345")
+        response = self.client.get(reverse("follows:follow-ui"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Authors who follow you")
+        self.assertNotContains(response, "follower</span>", html=False)

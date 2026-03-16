@@ -51,6 +51,7 @@ def follow_ui_page(request: HttpRequest) -> HttpResponse:
                 "following_pending": [],
                 "following_approved": [],
                 "incoming_requests": [],
+                "followers_approved": [],
                 "friends": [],
             },
         )
@@ -88,6 +89,15 @@ def follow_ui_page(request: HttpRequest) -> HttpResponse:
         followee=me, status=FollowRelationship.Status.PENDING
     ).select_related("follower")
 
+    followers_approved = (
+        FollowRelationship.objects.filter(
+            followee=me,
+            status=FollowRelationship.Status.APPROVED,
+            follower__is_deleted=False,
+        )
+        .select_related("follower")
+    )
+
     friends = list(FollowRelationship.friends_of(me).order_by("display_name"))
 
     return render(
@@ -99,6 +109,7 @@ def follow_ui_page(request: HttpRequest) -> HttpResponse:
             "following_pending": following_pending,
             "following_approved": following_approved,
             "incoming_requests": incoming_requests,
+            "followers_approved": followers_approved,
             "friends": friends,
         },
     )
