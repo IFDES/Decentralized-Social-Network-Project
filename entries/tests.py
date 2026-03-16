@@ -416,8 +416,12 @@ class StreamPageTests(TestCase):
     def setUp(self):
         self.client = Client()
         self.author = Author.objects.create(display_name="Template Author")
+        self.user = User.objects.create_user(username="stream_page_user", password="passA12345")
+        AuthorAccount.objects.create(user=self.user, author=self.author)
 
     def test_stream_page_orders_newest_first(self):
+        self.client.login(username="stream_page_user", password="passA12345")
+
         older_entry = Entry.objects.create(
             author=self.author,
             title="Older title",
@@ -446,6 +450,8 @@ class StreamPageTests(TestCase):
         self.assertLess(content.find("Newer title"), content.find("Older title"))
 
     def test_stream_page_excludes_non_public_entries(self):
+        self.client.login(username="stream_page_user", password="passA12345")
+
         Entry.objects.create(
             author=self.author,
             title="Friends-only title",
@@ -474,6 +480,8 @@ class StreamPageTests(TestCase):
         self.assertNotIn("Unlisted title", content)
 
     def test_stream_page_excludes_deleted_entries(self):
+        self.client.login(username="stream_page_user", password="passA12345")
+
         deleted_entry = Entry.objects.create(
             author=self.author,
             title="Deleted title",
@@ -500,6 +508,8 @@ class StreamPageTests(TestCase):
         self.assertNotIn("Deleted title", content)
 
     def test_stream_page_uses_deterministic_tiebreaker_when_timestamps_equal(self):
+        self.client.login(username="stream_page_user", password="passA12345")
+
         first_entry = Entry.objects.create(
             author=self.author,
             title="First page tie",
@@ -902,7 +912,7 @@ class EntryShareLinkTemplateTests(TestCase):
         response = self.client.get(url)
         self.assertEqual(response.status_code, 403)
     
-        def test_friends_only_entry_detail_page_for_owner_does_not_show_shareable_link(self):
+    def test_friends_only_entry_detail_page_for_owner_does_not_show_shareable_link(self):
         owner_user = User.objects.create_user(username="share_owner", password="passA12345")
         AuthorAccount.objects.create(user=owner_user, author=self.author)
 

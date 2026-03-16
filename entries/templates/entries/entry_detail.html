@@ -89,13 +89,6 @@
     <img src="" alt="" />
   </div>
   <script>
-    function copyShareLink() {
-      var input = document.getElementById('shareable-link');
-      if (!input) return;
-      input.select();
-      input.setSelectionRange(0, 99999);
-      navigator.clipboard.writeText(input.value).catch(function() {});
-    }
     (function() {
       var lb = document.getElementById('image-lightbox');
       var lbImg = lb && lb.querySelector('img');
