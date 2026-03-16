@@ -5,12 +5,27 @@ from django.db import models
 
 from authors.models import Author
 
+ENTRY_VISIBILITY_PUBLIC = "PUBLIC"
+ENTRY_VISIBILITY_FRIENDS = "FRIENDS"
+ENTRY_VISIBILITY_UNLISTED = "UNLISTED"
+ENTRY_VISIBILITY_DELETED = "DELETED"
+
+ENTRY_VISIBILITY_CHOICES = [
+    (ENTRY_VISIBILITY_PUBLIC, "Public"),
+    (ENTRY_VISIBILITY_FRIENDS, "Friends only"),
+    (ENTRY_VISIBILITY_UNLISTED, "Unlisted"),
+    (ENTRY_VISIBILITY_DELETED, "Deleted"),
+]
 
 class HostedImage(models.Model):
     """
     Images hosted on this node so users can use them in CommonMark entries.
     Served at /api/media/images/<uuid>/ (works in production). Node admins can
     manage uploads in Django admin.
+
+    Visibility is stored so direct image URLs can enforce the same basic access
+    policy as entries. If linked to an entry, the entry should be treated as the
+    source of truth when possible.
     """
     uuid = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     file = models.ImageField(upload_to="entries/images/%Y/%m/")
@@ -19,6 +34,21 @@ class HostedImage(models.Model):
         related_name="hosted_images",
         on_delete=models.CASCADE,
     )
+
+    entry = models.ForeignKey(
+        "Entry",
+        related_name="hosted_images",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+    )
+
+    visibility = models.CharField(
+        max_length=16,
+        choices=ENTRY_VISIBILITY_CHOICES,
+        default=ENTRY_VISIBILITY_PUBLIC,
+    )
+
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -31,17 +61,12 @@ class Entry(models.Model):
     Only supports plain text and markdown for Project part 1 (temp)
     """
 
-    VISIBILITY_PUBLIC = "PUBLIC"
-    VISIBILITY_FRIENDS = "FRIENDS"
-    VISIBILITY_UNLISTED = "UNLISTED"
-    VISIBILITY_DELETED = "DELETED"
+    VISIBILITY_PUBLIC = ENTRY_VISIBILITY_PUBLIC
+    VISIBILITY_FRIENDS = ENTRY_VISIBILITY_FRIENDS
+    VISIBILITY_UNLISTED = ENTRY_VISIBILITY_UNLISTED
+    VISIBILITY_DELETED = ENTRY_VISIBILITY_DELETED
 
-    VISIBILITY_CHOICES = [
-        (VISIBILITY_PUBLIC, "Public"),
-        (VISIBILITY_FRIENDS, "Friends only"),
-        (VISIBILITY_UNLISTED, "Unlisted"),
-        (VISIBILITY_DELETED, "Deleted"),
-    ]
+    VISIBILITY_CHOICES = ENTRY_VISIBILITY_CHOICES
 
     CONTENT_TEXT_PLAIN = "text/plain"
     CONTENT_TEXT_MARKDOWN = "text/markdown"

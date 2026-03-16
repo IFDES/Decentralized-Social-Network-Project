@@ -61,6 +61,20 @@
   <p><strong>Published:</strong> {{ entry.published }}</p>
   <p><strong>Visibility:</strong> {{ entry.visibility }}</p>
 
+  {% if shareable_link %}
+    <div style="margin: 1em 0;">
+      <strong>Share link:</strong><br>
+      <input
+        id="shareable-link"
+        type="text"
+        value="{{ shareable_link }}"
+        readonly
+        style="width: 100%; max-width: 700px;"
+      >
+      <button type="button" onclick="copyShareLink()">Copy link</button>
+    </div>
+  {% endif %}
+
   <h2>Content</h2>
   {% if entry.image_urls %}
     {% comment %}Text above images (Twitter-style){% endcomment %}
@@ -95,7 +109,7 @@
     {% endif %}
   {% endif %}
 
-  {% if current_author.uuid == author.uuid %}
+  {% if current_author and current_author.uuid == author.uuid %}
   <p>
     <a href="{% url 'entries:entry-edit' author.uuid entry.uuid %}">Edit</a> |
     <a href="{% url 'entries:entry-delete' author.uuid entry.uuid %}">Delete</a>
@@ -224,6 +238,13 @@
     <img src="" alt="" />
   </div>
   <script>
+    function copyShareLink() {
+      var input = document.getElementById('shareable-link');
+      if (!input) return;
+      input.select();
+      input.setSelectionRange(0, 99999);
+      navigator.clipboard.writeText(input.value).catch(function() {});
+    }
     (function() {
       var lb = document.getElementById('image-lightbox');
       var lbImg = lb && lb.querySelector('img');
