@@ -18,6 +18,7 @@ Protected operations include:
 - `POST /api/authors/{AUTHOR_SERIAL}/entries`
 - `PUT /api/authors/{AUTHOR_SERIAL}/entries/{ENTRY_SERIAL}`
 - `DELETE /api/authors/{AUTHOR_SERIAL}/entries/{ENTRY_SERIAL}`
+- `POST /api/authors/{AUTHOR_SERIAL}/images`
 - `POST /authors/{AUTHOR_SERIAL}/entries/new/`
 - `GET|POST /authors/{AUTHOR_SERIAL}/entries/{ENTRY_SERIAL}/edit/`
 - `GET|POST /authors/{AUTHOR_SERIAL}/entries/{ENTRY_SERIAL}/delete/`
@@ -176,37 +177,48 @@ Entries with `visibility = DELETED` are also excluded from stream results.
   - `FRIENDS` entries from authors where the relationship is mutual `APPROVED` follow.
 - Entries are read from the local `Entry` store, so the same rules apply to locally created entries and any remote entries that have been ingested and stored here.
 
+#### Entry object shape
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `type` | `"entry"` | |
+| `title` | string | May be empty |
+| `id` | string (FQID) | Canonical API URL for this entry |
+| `web` | string (URL) | Browser-viewable URL |
+| `contentType` | string | `"text/plain"` or `"text/markdown"` |
+| `content` | string | Body of the entry |
+| `author` | author object | Embedded author |
+| `comments` | comments object | First 5 comments; same shape as Comments API list |
+| `likes` | likes object | First 5 likes; same shape as Likes API list |
+| `published` | ISO 8601 | Creation time (UTC) |
+| `updated_at` | ISO 8601 | Last edit time (UTC) |
+| `visibility` | string | `PUBLIC`, `UNLISTED`, or `FRIENDS` |
+| `image_urls` | array of strings | Absolute URLs of node-hosted images attached to this entry |
+
 #### Example request
 
 ```http
-GET /api/stream?page=1&size=2
+GET /api/stream?page=1&size=1
 ```
 
 The response order is newest-first according to `updated_at`.
 
-#### Example request
-
-```http
-GET /api/authors/f67eb8e9-57e9-494b-88f4-c7234ce3f39b/entries/141ffa4c-43ec-42c6-83bb-e65eb72db04d/comments
-```
-
-#### Example response for a friend viewer
+#### Example response
 
 ```json
 {
   "type": "entries",
   "page_number": 1,
-  "size": 2,
-  "count": 2,
+  "size": 1,
+  "count": 1,
   "src": [
     {
       "type": "entry",
       "title": "Weekly update",
       "id": "http://127.0.0.1:8000/api/authors/8d35d13e-f0ee-468d-bd6f-f942ec660f43/entries/d25343a5-c5cf-4734-b8cf-11211f7af26f",
       "web": "http://127.0.0.1:8000/authors/8d35d13e-f0ee-468d-bd6f-f942ec660f43/entries/d25343a5-c5cf-4734-b8cf-11211f7af26f",
-      "description": "",
       "contentType": "text/plain",
-      "content": "Edited content",
+      "content": "Hello from the stream.",
       "author": {
         "type": "author",
         "id": "http://127.0.0.1:8000/api/authors/8d35d13e-f0ee-468d-bd6f-f942ec660f43",
@@ -236,52 +248,200 @@ GET /api/authors/f67eb8e9-57e9-494b-88f4-c7234ce3f39b/entries/141ffa4c-43ec-42c6
       },
       "published": "2026-02-28T12:00:00+00:00",
       "updated_at": "2026-02-28T12:05:00+00:00",
-      "visibility": "PUBLIC"
-    },
-    {
-      "type": "entry",
-      "title": "Another public post",
-      "id": "http://127.0.0.1:8000/api/authors/11111111-1111-1111-1111-111111111111/entries/22222222-2222-2222-2222-222222222222",
-      "web": "http://127.0.0.1:8000/authors/11111111-1111-1111-1111-111111111111/entries/22222222-2222-2222-2222-222222222222",
-      "description": "",
-      "contentType": "text/plain",
-      "content": "A second public message",
-      "author": {
-        "type": "author",
-        "id": "http://127.0.0.1:8000/api/authors/11111111-1111-1111-1111-111111111111",
-        "host": "http://127.0.0.1:8000/api/",
-        "displayName": "Another Author",
-        "web": "http://127.0.0.1:8000/authors/11111111-1111-1111-1111-111111111111",
-        "github": "",
-        "profileImage": ""
-      },
-      "comments": {
-        "type": "comments",
-        "id": "http://127.0.0.1:8000/api/authors/11111111-1111-1111-1111-111111111111/entries/22222222-2222-2222-2222-222222222222/comments",
-        "web": "http://127.0.0.1:8000/authors/11111111-1111-1111-1111-111111111111/entries/22222222-2222-2222-2222-222222222222",
-        "page_number": 1,
-        "size": 5,
-        "count": 0,
-        "src": []
-      },
-      "likes": {
-        "type": "likes",
-        "id": "http://127.0.0.1:8000/api/authors/11111111-1111-1111-1111-111111111111/entries/22222222-2222-2222-2222-222222222222/likes",
-        "web": "http://127.0.0.1:8000/authors/11111111-1111-1111-1111-111111111111/entries/22222222-2222-2222-2222-222222222222",
-        "page_number": 1,
-        "size": 5,
-        "count": 0,
-        "src": []
-      },
-      "published": "2026-02-28T11:20:00+00:00",
-      "updated_at": "2026-02-28T11:20:00+00:00",
-      "visibility": "PUBLIC"
+      "visibility": "PUBLIC",
+      "image_urls": []
     }
   ]
 }
 ```
 
 Deleted entries are not included in stream responses.
+
+---
+
+## Entries API
+
+### GET /api/authors/{AUTHOR_SERIAL}/entries
+
+- **Purpose**: List entries belonging to a specific author, filtered by the caller's relationship to that author.
+- **Auth**: None required (anonymous callers receive `PUBLIC` entries only).
+- **Query params**:
+  - `page` (optional, default `1`)
+  - `size` (optional, default `10`)
+
+#### Visibility rules
+
+| Viewer | Entries returned |
+|--------|-----------------|
+| Anonymous / no relationship | `PUBLIC` only |
+| Approved follower (non-mutual) | `PUBLIC` + `UNLISTED` |
+| Mutual friend or the owner | `PUBLIC` + `UNLISTED` + `FRIENDS` |
+
+#### Response
+
+- **Status**: `200 OK`
+- **Body**: Paginated `entries` envelope (same shape as the stream response).
+
+---
+
+### POST /api/authors/{AUTHOR_SERIAL}/entries
+
+- **Purpose**: Create a new entry as the given author.
+- **Auth**: Must be authenticated as `{AUTHOR_SERIAL}` (owner-only). Returns `403` otherwise.
+- **Body** (`application/json`):
+
+| Field | Required | Default | Notes |
+|-------|----------|---------|-------|
+| `content` | yes | — | Entry body text |
+| `title` | no | `""` | Display title |
+| `contentType` | no | `"text/plain"` | `"text/plain"` or `"text/markdown"` |
+| `visibility` | no | `"PUBLIC"` | `"PUBLIC"`, `"UNLISTED"`, or `"FRIENDS"` |
+
+#### Response
+
+- **Status**: `201 Created` with the new entry object.
+- **Status**: `400 Bad Request` if `content` is missing, `contentType` is unrecognised, or `visibility` is unrecognised.
+- **Status**: `403 Forbidden` if not the owner.
+
+#### Example request
+
+```http
+POST /api/authors/8d35d13e-f0ee-468d-bd6f-f942ec660f43/entries
+Content-Type: application/json
+
+{
+  "title": "My first post",
+  "content": "Hello world!",
+  "contentType": "text/plain",
+  "visibility": "PUBLIC"
+}
+```
+
+#### Example response
+
+```json
+{
+  "type": "entry",
+  "title": "My first post",
+  "id": "http://127.0.0.1:8000/api/authors/8d35d13e-f0ee-468d-bd6f-f942ec660f43/entries/d25343a5-c5cf-4734-b8cf-11211f7af26f",
+  "web": "http://127.0.0.1:8000/authors/8d35d13e-f0ee-468d-bd6f-f942ec660f43/entries/d25343a5-c5cf-4734-b8cf-11211f7af26f",
+  "contentType": "text/plain",
+  "content": "Hello world!",
+  "author": {
+    "type": "author",
+    "id": "http://127.0.0.1:8000/api/authors/8d35d13e-f0ee-468d-bd6f-f942ec660f43",
+    "host": "http://127.0.0.1:8000/api/",
+    "displayName": "Stream Author",
+    "web": "http://127.0.0.1:8000/authors/8d35d13e-f0ee-468d-bd6f-f942ec660f43",
+    "github": "",
+    "profileImage": ""
+  },
+  "comments": { "type": "comments", "count": 0, "src": [] },
+  "likes": { "type": "likes", "count": 0, "src": [] },
+  "published": "2026-03-16T00:00:00+00:00",
+  "updated_at": "2026-03-16T00:00:00+00:00",
+  "visibility": "PUBLIC",
+  "image_urls": []
+}
+```
+
+---
+
+### GET /api/authors/{AUTHOR_SERIAL}/entries/{ENTRY_SERIAL}
+
+- **Purpose**: Fetch a single entry by its UUID.
+- **Auth**: None required for `PUBLIC` and `UNLISTED` entries. `FRIENDS` entries require the caller to be a mutual friend. Node admins can access soft-deleted entries.
+
+#### Visibility rules
+
+| Entry visibility | Who can access |
+|-----------------|---------------|
+| `PUBLIC` | Anyone |
+| `UNLISTED` | Anyone with the direct link |
+| `FRIENDS` | Owner, mutual friends, node admins |
+| `DELETED` | Node admins only |
+
+#### Response
+
+- **Status**: `200 OK` with entry object.
+- **Status**: `403 Forbidden` if the caller lacks permission.
+- **Status**: `404 Not Found` if the author or entry does not exist.
+
+---
+
+### PUT /api/authors/{AUTHOR_SERIAL}/entries/{ENTRY_SERIAL}
+
+- **Purpose**: Update an existing entry. All fields are optional; omitted fields keep their current value.
+- **Auth**: Must be authenticated as `{AUTHOR_SERIAL}` (owner-only).
+- **Body** (`application/json`):
+
+| Field | Notes |
+|-------|-------|
+| `title` | New title |
+| `content` | New body (must not be empty if provided) |
+| `contentType` | `"text/plain"` or `"text/markdown"` |
+| `visibility` | `"PUBLIC"`, `"UNLISTED"`, or `"FRIENDS"` |
+
+#### Response
+
+- **Status**: `200 OK` with the updated entry object.
+- **Status**: `400 Bad Request` if `content` is empty, `contentType` or `visibility` is unrecognised, or the entry is already deleted.
+- **Status**: `403 Forbidden` if not the owner.
+- **Status**: `404 Not Found` if the entry does not exist.
+
+---
+
+### DELETE /api/authors/{AUTHOR_SERIAL}/entries/{ENTRY_SERIAL}
+
+- **Purpose**: Soft-delete an entry. Sets `is_deleted=True`, `visibility=DELETED`, and records `deleted_at`. The row is retained in the database.
+- **Auth**: Must be authenticated as `{AUTHOR_SERIAL}` (owner-only).
+
+#### Response
+
+- **Status**: `204 No Content` on success (also returned if the entry was already deleted).
+- **Status**: `403 Forbidden` if not the owner.
+- **Status**: `404 Not Found` if the entry or author does not exist.
+
+---
+
+## Image Hosting API
+
+Node-hosted images can be uploaded and served at stable URLs suitable for embedding in `text/markdown` entry content.
+
+### POST /api/authors/{AUTHOR_SERIAL}/images
+
+- **Purpose**: Upload an image file to be hosted by this node.
+- **Auth**: Must be authenticated as `{AUTHOR_SERIAL}` (owner-only).
+- **Body** (`multipart/form-data`):
+  - `file` or `image` — the image file to upload.
+  - Accepted MIME types: `image/png`, `image/jpeg`, `image/gif`, `image/webp`.
+
+#### Response
+
+- **Status**: `201 Created`
+- **Body** (`application/json`):
+
+```json
+{
+  "url": "http://127.0.0.1:8000/api/media/images/e1a2b3c4-0000-0000-0000-000000000000/",
+  "uuid": "e1a2b3c4-0000-0000-0000-000000000000"
+}
+```
+
+- **Status**: `400 Bad Request` if no file is provided or the MIME type is not allowed.
+- **Status**: `403 Forbidden` if not the owner.
+
+---
+
+### GET /api/media/images/{IMAGE_SERIAL}/
+
+- **Purpose**: Serve a node-hosted image file by its UUID.
+- **Auth**: Visibility follows the entry the image is attached to.
+  - `PUBLIC` / `UNLISTED` entry images: accessible to anyone with the URL.
+  - `FRIENDS` entry images: requires the caller to be a mutual friend of the uploader or a node admin.
+  - Images not attached to any entry use the image's own `visibility` field with the same rules.
+  - `DELETED` images are accessible to node admins only.
+- **Response**: Raw image binary with the appropriate `Content-Type` header. Returns `400` if the file is missing on disk, `403` if the caller lacks permission.
 
 ---
 
