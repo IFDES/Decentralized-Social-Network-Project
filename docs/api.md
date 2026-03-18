@@ -361,12 +361,24 @@ Content-Type: application/json
 | `FRIENDS` | Owner, mutual friends, node admins |
 | `DELETED` | Node admins only |
 
+### Friendship definition
+
+A friendship means a mutual approved follow:
+
+- `A -> B` is `APPROVED`
+- `B -> A` is `APPROVED`
+
+This is implemented with `FollowRelationship.are_friends(...)`.
+
 #### Response
 
 - **Status**: `200 OK` with entry object.
 - **Status**: `403 Forbidden` if the caller lacks permission.
 - **Status**: `404 Not Found` if the author or entry does not exist.
-
+- `PUBLIC`: `200 OK` for anyone
+- `UNLISTED`: `200 OK` for anyone with the link
+- `FRIENDS`: `200 OK` only for author, friend, or admin; otherwise `403 Forbidden`
+- `DELETED`: `200 OK` only for admin; otherwise `403 Forbidden`
 ---
 
 ### PUT /api/authors/{AUTHOR_SERIAL}/entries/{ENTRY_SERIAL}

@@ -19,9 +19,7 @@ ENTRY_VISIBILITY_CHOICES = [
 
 class HostedImage(models.Model):
     """
-    Images hosted on this node so users can use them in CommonMark entries.
-    Served at /api/media/images/<uuid>/ (works in production). Node admins can
-    manage uploads in Django admin.
+    Images hosted on this node so users can use them in CommonMark entries. Served at   /api/media/images/<uuid>/. Node admins can manage uploads in Django admin.
 
     Visibility is stored so direct image URLs can enforce the same basic access
     policy as entries. If linked to an entry, the entry should be treated as the

@@ -32,7 +32,8 @@
 
   <!-- Content -->
   <div class="entry-card__content">
-    {% if entry.image_urls %}
+  {% with hosted_images=entry.hosted_images.all %}
+    {% if hosted_images %}
       {% if entry.content %}
         {% if entry.content_type == "text/markdown" %}
           <div class="entry-markdown">{{ entry.content|render_markdown|safe }}</div>
@@ -41,9 +42,9 @@
         {% endif %}
       {% endif %}
       <div class="entry-images">
-        {% for url in entry.image_urls %}
+        {% for hosted in hosted_images %}
           <figure class="entry-image">
-            <img src="{{ url }}" alt="{{ entry.title|default:'Image' }}" />
+            <img src="{% url 'entries:serve-hosted-image' hosted.uuid %}" alt="{{ entry.title|default:'Image' }}" />
           </figure>
         {% endfor %}
       </div>
@@ -63,7 +64,8 @@
         {% endif %}
       {% endif %}
     {% endif %}
-  </div>
+  {% endwith %}
+</div>
 
   <!-- Likes footer -->
   <div class="entry-card__footer">

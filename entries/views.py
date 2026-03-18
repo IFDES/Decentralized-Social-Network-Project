@@ -40,7 +40,7 @@ from .visibility import (
 # "Help me fix these errors "ERROR MESSAGES" in the views.py file for image hosting in entries in Django"
 
 def _hosted_image_canonical_url(request: HttpRequest, hosted: HostedImage) -> str:
-    """Return the canonical URL for a hosted image (works in production, not tied to DEBUG/MEDIA)."""
+    """Return the canonical URL for a hosted image."""
     path = reverse("entries:serve-hosted-image", args=[hosted.uuid])
     return request.build_absolute_uri(path)
 
@@ -577,7 +577,7 @@ def entry_edit_page(
         form = EntryForm(request.POST, request.FILES, instance=entry)
         if form.is_valid():
             entry = form.save(commit=False)
-            entry.save()
+            entry.save() # Redundant?
 
             _build_image_urls_from_request(
                 request,
