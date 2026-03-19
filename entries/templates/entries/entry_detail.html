@@ -59,12 +59,12 @@
   {% endif %}
 
   <h4>Add a comment</h4>
-  {% if not current_author and not authors %}
+  {% if not user.is_active and not user.is_staff %}
     <p>No authors available to comment as. Create an author in the admin, or log in with an account linked to an author.</p>
   {% else %}
   <form action="{% url 'entries:entry-comment-create' author.uuid entry.uuid %}" method="post">
     {% csrf_token %}
-    {% if not current_author and authors %}
+    {% if admin_viewer %}
       <p>
         <label for="comment_author_id">Comment as:</label>
         <select name="author_id" id="comment_author_id" required>
