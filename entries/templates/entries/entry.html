@@ -69,24 +69,11 @@
 
   <!-- Likes footer -->
   <div class="entry-card__footer">
-    {% if current_author %}
+    {% if user.is_active %}
       {% if current_user_has_liked %}{% url 'entries:entry-unlike' author.uuid entry.uuid as like_action %}{% else %}{% url 'entries:entry-like' author.uuid entry.uuid as like_action %}{% endif %}
       <form action="{{ like_action }}" method="post" style="display:inline;">
         {% csrf_token %}
         <button type="submit" class="like-btn{% if current_user_has_liked %} is-liked{% endif %}" title="{% if current_user_has_liked %}Unlike{% else %}Like{% endif %}">
-          {% include "icons/heart.svg" %}
-          {{ like_count }}
-        </button>
-      </form>
-    {% elif authors %}
-      <form action="{% url 'entries:entry-like' author.uuid entry.uuid %}" method="post" style="display:inline-flex; align-items:center; gap:6px;">
-        {% csrf_token %}
-        <select name="author_id" class="like-author-select" required>
-          {% for a in authors %}
-            <option value="{{ a.uuid }}">{{ a.display_name }}</option>
-          {% endfor %}
-        </select>
-        <button type="submit" class="like-btn" title="Like">
           {% include "icons/heart.svg" %}
           {{ like_count }}
         </button>

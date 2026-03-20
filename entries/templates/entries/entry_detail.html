@@ -14,20 +14,21 @@
           <div class="comment-author">{{ c.author.display_name }}</div>
           <div class="comment-date">{{ c.published }}</div>
           <div class="comment-text">{{ c.comment }}</div>
-          <div class="comment-likes" style="margin-top: 6px; font-size: 0.9em;">
-            <span>{{ c.like_count }} like{{ c.like_count|pluralize }}</span>
+          <div class="comment-likes">
             {% if user.is_active %}
-              {% if c.current_user_has_liked %}
-                <form action="{% url 'entries:comment-unlike' author.uuid entry.uuid c.uuid %}" method="post" style="display:inline;">
-                  {% csrf_token %}
-                  <button type="submit" style="font-size:0.85em;">Unlike</button>
-                </form>
-              {% else %}
-                <form action="{% url 'entries:comment-like' author.uuid entry.uuid c.uuid %}" method="post" style="display:inline;">
-                  {% csrf_token %}
-                  <button type="submit" style="font-size:0.85em;">Like</button>
-                </form>
-              {% endif %}
+              {% if c.current_user_has_liked %}{% url 'entries:comment-unlike' author.uuid entry.uuid c.uuid as comment_like_action %}{% else %}{% url 'entries:comment-like' author.uuid entry.uuid c.uuid as comment_like_action %}{% endif %}
+              <form action="{{ comment_like_action }}" method="post" style="display:inline;">
+                {% csrf_token %}
+                <button type="submit" class="like-btn{% if c.current_user_has_liked %} is-liked{% endif %}" title="{% if c.current_user_has_liked %}Unlike{% else %}Like{% endif %}">
+                  {% include "icons/heart.svg" %}
+                  {{ c.like_count }}
+                </button>
+              </form>
+            {% else %}
+              <span class="like-btn" style="cursor:default;">
+                {% include "icons/heart.svg" %}
+                {{ c.like_count }}
+              </span>
             {% endif %}
           </div>
         </li>
