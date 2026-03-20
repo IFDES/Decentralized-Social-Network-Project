@@ -16,7 +16,7 @@
           <div class="comment-text">{{ c.comment }}</div>
           <div class="comment-likes" style="margin-top: 6px; font-size: 0.9em;">
             <span>{{ c.like_count }} like{{ c.like_count|pluralize }}</span>
-            {% if current_author %}
+            {% if user.is_active %}
               {% if c.current_user_has_liked %}
                 <form action="{% url 'entries:comment-unlike' author.uuid entry.uuid c.uuid %}" method="post" style="display:inline;">
                   {% csrf_token %}
@@ -26,27 +26,6 @@
                 <form action="{% url 'entries:comment-like' author.uuid entry.uuid c.uuid %}" method="post" style="display:inline;">
                   {% csrf_token %}
                   <button type="submit" style="font-size:0.85em;">Like</button>
-                </form>
-              {% endif %}
-            {% else %}
-              {% if authors %}
-                <form action="{% url 'entries:comment-like' author.uuid entry.uuid c.uuid %}" method="post" style="display:inline;">
-                  {% csrf_token %}
-                  <select name="author_id" style="font-size:0.85em;" required>
-                    {% for a in authors %}
-                      <option value="{{ a.uuid }}">{{ a.display_name }}</option>
-                    {% endfor %}
-                  </select>
-                  <button type="submit" style="font-size:0.85em;">Like</button>
-                </form>
-                <form action="{% url 'entries:comment-unlike' author.uuid entry.uuid c.uuid %}" method="post" style="display:inline;">
-                  {% csrf_token %}
-                  <select name="author_id" style="font-size:0.85em;" required>
-                    {% for a in authors %}
-                      <option value="{{ a.uuid }}">{{ a.display_name }}</option>
-                    {% endfor %}
-                  </select>
-                  <button type="submit" style="font-size:0.85em;">Unlike</button>
                 </form>
               {% endif %}
             {% endif %}
@@ -64,16 +43,6 @@
   {% else %}
   <form action="{% url 'entries:entry-comment-create' author.uuid entry.uuid %}" method="post">
     {% csrf_token %}
-    {% if admin_viewer %}
-      <p>
-        <label for="comment_author_id">Comment as:</label>
-        <select name="author_id" id="comment_author_id" required>
-          {% for a in authors %}
-            <option value="{{ a.uuid }}">{{ a.display_name }}</option>
-          {% endfor %}
-        </select>
-      </p>
-    {% endif %}
     <p>
       <label for="comment_text">Comment:</label><br>
       <textarea name="comment" id="comment_text" rows="3" required></textarea>
