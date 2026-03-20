@@ -287,10 +287,29 @@ body {
   color: #374151;
 }
 
-.comment-block { margin-bottom: 1em; padding: 0.5em; border: 1px solid #e5e7eb; border-radius: 4px; background: #ffffff; }
+/* MAKE SURE TO COPY THIS FROM .entry-card SO IT MAINTAINS THE SAME LOOK AND STYLE */
+.comment-block { 
+  background: #ffffff;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  padding: 1.25rem 1.5rem;
+  margin-bottom: 1.5rem;
+  max-width: 33vw;
+  min-width: 0;
+  overflow: hidden; 
+}
 .comment-author { font-weight: bold; color: #111827; }
 .comment-date { font-size: 0.9em; color: #6b7280; margin-bottom: 0.25em; }
 .comment-text { white-space: pre-wrap; word-wrap: break-word; max-width: 100%; overflow-wrap: break-word; color: #374151; }
+
+.comment-likes {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-top: 1rem;
+  padding-top: 0.75rem;
+  flex-wrap: wrap;
+}
 
 .entry-markdown { max-width: 100%; }
 
