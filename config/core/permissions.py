@@ -42,6 +42,17 @@ def user_matches_author_uuid(request: HttpRequest, author_uuid) -> bool:
     # Allow if the user's Author UUID matches the UUID in the URL
     return acct.author.uuid == author_uuid
 
+def is_node_request(request: HttpRequest) -> bool:
+    """
+    Return True if the request was authenticated as a remote node
+    (i.e. the User is linked to a RemoteNode via the node_user OneToOne).
+    """
+    user = getattr(request, "user", None)
+    if user is None or not getattr(user, "is_authenticated", False):
+        return False
+    return hasattr(user, "remote_node")
+
+
 def user_owns_object_via_author(request: HttpRequest, obj) -> bool:
     """
     Ownership check for objects that have an 'author' relation (entries,
