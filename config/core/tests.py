@@ -341,3 +341,19 @@ class OutgoingRequestTests(TestCase):
         headers = mock_request.call_args[1]["headers"]
         self.assertEqual(headers["Content-Type"], "application/json")
         self.assertEqual(headers["Accept"], "application/json")
+
+    @patch("config.core.request_utils.requests.request")
+    def test_disabled_node_blocks_outgoing_request(self, mock_request):
+        self.node.is_active = False
+        self.node.save()
+        with self.assertRaises(NodeDisabled):
+            make_node_request(self.node, "GET", "api/authors")
+        mock_request.assert_not_called()
+
+    @patch("config.core.request_utils.requests.request")
+    def test_enabled_node_allows_outgoing_request(self, mock_request):
+        mock_request.return_value = MagicMock(status_code=200)
+        self.assertTrue(self.node.is_active)
+        resp = make_node_request(self.node, "GET", "api/authors")
+        mock_request.assert_called_once()
+        self.assertEqual(resp.status_code, 200)

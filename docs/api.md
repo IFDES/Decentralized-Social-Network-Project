@@ -86,12 +86,35 @@ Any endpoint decorated with `@require_node_auth` requires node-to-node Basic Aut
 
 When our node sends data to a remote node (e.g. pushing entries to a remote inbox), it uses the `outgoing_username` and `outgoing_password` stored in the `RemoteNode` record. This is handled by the `make_node_request()` utility in `config/core/request_utils.py`.
 
+If the target node has been **disabled** (`is_active = False`), `make_node_request()` raises `NodeDisabled` and **no HTTP request is sent**. Callers should handle this exception appropriately (e.g. skip that node, log a warning).
+
+### Disabling a Remote Node
+
+A node admin can disable a remote node to cut off **all** node-to-node communication with it in both directions:
+
+| Direction | Behaviour when disabled |
+|-----------|------------------------|
+| **Incoming** (remote → us) | Valid Basic Auth credentials are rejected with `403 Forbidden`. |
+| **Outgoing** (us → remote) | `make_node_request()` raises `NodeDisabled` before any HTTP request is sent. |
+
+Disabling a node does **not** delete any previously received remote content. It only stops future communication.
+
+#### Example scenario
+
+1. Admin adds remote node `https://other.herokuapp.com` with `is_active = True`.
+2. That node can call our protected endpoints and we can push data to it -- everything works normally.
+3. The remote node starts misbehaving, so the admin unchecks `is_active` in the Django admin list view.
+4. **Incoming**: the remote node's next request gets `403 Forbidden`, even though its credentials are still valid.
+5. **Outgoing**: any code that tries to call `make_node_request()` for that node raises `NodeDisabled` and no request is sent.
+6. To re-enable, the admin checks `is_active` again. Communication resumes immediately.
+
 ### Admin management
 
 Node admins manage remote node connections at `/admin/core/remotenode/`:
 
 - **Add a node**: enter the remote node's base URL and outgoing credentials. Incoming credentials are auto-generated and displayed once.
-- **Disable a node**: uncheck `is_active` in the list view. The node's requests will be rejected with `403`.
+- **Disable a node**: uncheck `is_active` in the list view. All communication is blocked in both directions.
+- **Re-enable a node**: check `is_active` again. Communication resumes immediately.
 - **Reset incoming password**: use the "Reset incoming password" admin action to generate a new password (share the new password with the remote team).
 - **Remove a node**: delete the record. The associated Django User is also deleted.
 
