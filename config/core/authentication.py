@@ -26,6 +26,9 @@ class NodeBasicAuthBackend:
         if not user.check_password(password):
             return None
 
+        if not user.is_active:
+            return None
+
         from config.core.models import RemoteNode
 
         try:

@@ -37,6 +37,7 @@ urlpatterns = [
     path("", include("authors.urls")),
     path("", include("entries.urls")),
     path("", include("follows.urls")),
+    path("", include("inbox.urls")),
 ]
 
 if settings.DEBUG:
