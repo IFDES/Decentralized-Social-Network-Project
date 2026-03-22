@@ -39,7 +39,7 @@ ALLOWED_HOSTS = [
     host.strip()
     for host in os.environ.get("ALLOWED_HOSTS", "").split(",")
     if host.strip()
-]
+] + [".herokuapp.com"]
 
 CSRF_TRUSTED_ORIGINS = [
     origin.strip()

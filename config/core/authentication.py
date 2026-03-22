@@ -3,10 +3,18 @@ from django.contrib.auth import get_user_model
 User = get_user_model()
 
 
+class NodeDisabled(Exception):
+    """Raised when credentials are valid but the RemoteNode is disabled."""
+    pass
+
+
 class NodeBasicAuthBackend:
     """
     Authenticates incoming requests using HTTP Basic Auth.
     Only succeeds for Users linked to an active RemoteNode.
+
+    Raises NodeDisabled when the credentials match a disabled node so
+    callers (middleware / decorators) can return 403 instead of 401.
     """
 
     def authenticate(self, request=None, username=None, password=None, **kwargs):
@@ -18,15 +26,15 @@ class NodeBasicAuthBackend:
         if not user.check_password(password):
             return None
 
-        # Only allow if this user is linked to an active RemoteNode
         from config.core.models import RemoteNode
 
         try:
             node = user.remote_node
-            if not node.is_active:
-                return None
         except RemoteNode.DoesNotExist:
             return None
+
+        if not node.is_active:
+            raise NodeDisabled(f"Node {node} is disabled")
 
         return user
 

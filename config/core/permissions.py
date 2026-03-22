@@ -1,4 +1,6 @@
-from django.http import HttpRequest
+from functools import wraps
+
+from django.http import HttpRequest, JsonResponse
 
 
 def user_is_authenticated(request: HttpRequest) -> bool:
@@ -63,3 +65,33 @@ def user_owns_object_via_author(request: HttpRequest, obj) -> bool:
     if author is None:
         return False
     return user_matches_author_uuid(request, author)
+
+
+def require_node_auth(view_func):
+    """
+    Decorator for views that require node-to-node HTTP Basic Auth.
+
+    Returns:
+        200/201/etc. — if the request was authenticated as an active RemoteNode
+        401          — if credentials are missing, malformed, or invalid
+        403          — if credentials are valid but the node is disabled
+    """
+    @wraps(view_func)
+    def wrapper(request, *args, **kwargs):
+        if is_node_request(request):
+            return view_func(request, *args, **kwargs)
+
+        if getattr(request, "_node_auth_disabled", False):
+            return JsonResponse(
+                {"error": "Node is disabled. Contact the node administrator."},
+                status=403,
+            )
+
+        response = JsonResponse(
+            {"error": "Authentication required. Provide HTTP Basic Auth credentials."},
+            status=401,
+        )
+        response["WWW-Authenticate"] = 'Basic realm="node-to-node"'
+        return response
+
+    return wrapper

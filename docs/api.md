@@ -4,8 +4,8 @@
 - **Base URL (deployed Heroku App)**: "https://garr-distributedsocial-9837ac888a84.herokuapp.com/admin"
 - **API prefix**: all API paths below are relative to `{BASE_URL}` (whether it is from local dev, or heroku app)
 - **Authentication**:
-  - **Local** (browser / same node): Django session (login form) or whatever the team chooses.
-  - **Remote** (node-to-node): HTTP Basic Auth as required by the project spec (to be wired in later project parts).
+  - **Local** (browser / same node): Django session (login form).
+  - **Remote** (node-to-node): HTTP Basic Auth (see [Node-to-Node Authentication](#node-to-node-authentication) below).
 
 ## Authorization (owner-scoped mutations)
 
@@ -31,6 +31,69 @@ All API objects use **FQIDs** (fully qualified IDs) in their `id` fields, e.g.:
 - Entry: `{BASE_URL}/api/authors/{AUTHOR_SERIAL}/entries/{ENTRY_SERIAL}`
 
 `AUTHOR_SERIAL` and `ENTRY_SERIAL` are serials (UUIDs or similar) that are unique per node. The combination of `{BASE_URL}` and the serial is globally unique.
+
+---
+
+## Node-to-Node Authentication
+
+Remote nodes authenticate to our API using **HTTP Basic Auth**. This is separate from the session-based login used by browser users.
+
+### How it works
+
+Each remote node is represented by a `RemoteNode` record in the database, managed through the Django admin panel at `/admin/core/remotenode/`.
+
+A `RemoteNode` stores two sets of credentials:
+
+| Direction | Fields | Purpose |
+|-----------|--------|---------|
+| **Incoming** | Auto-created Django User (`node_user`) | The remote node uses these credentials (username + password) to call **our** API |
+| **Outgoing** | `outgoing_username`, `outgoing_password` | **We** use these credentials to call the remote node's API |
+
+When a node admin adds a new remote node via the admin panel, the system auto-generates a Django User with a random password. The admin panel displays the incoming credentials once at creation time — these must be shared with the remote team.
+
+### Incoming requests (remote node → our API)
+
+Remote nodes must include an `Authorization` header with every request to protected endpoints:
+
+```http
+GET /api/authors HTTP/1.1
+Host: our-node.herokuapp.com
+Authorization: Basic <base64(username:password)>
+```
+
+Where `<base64(username:password)>` is the Base64 encoding of `username:password` using the incoming credentials provided by our admin.
+
+#### Example
+
+If the incoming username is `node-remote.example.com` and password is `abc123`:
+
+```http
+Authorization: Basic bm9kZS1yZW1vdGUuZXhhbXBsZS5jb206YWJjMTIz
+```
+
+#### Status codes
+
+| Status | Meaning |
+|--------|---------|
+| `401 Unauthorized` | No `Authorization` header, malformed header, or invalid credentials. Response includes `WWW-Authenticate: Basic realm="node-to-node"` header. |
+| `403 Forbidden` | Credentials are valid but the node has been **disabled** by the admin (`is_active = False`). Contact the node administrator to re-enable. |
+
+#### Protected endpoints
+
+Any endpoint decorated with `@require_node_auth` requires node-to-node Basic Auth. Currently this applies to federation / inbox endpoints as they are implemented. Public GET endpoints (authors list, stream, entry detail for public entries) remain accessible without node auth.
+
+### Outgoing requests (our node → remote node)
+
+When our node sends data to a remote node (e.g. pushing entries to a remote inbox), it uses the `outgoing_username` and `outgoing_password` stored in the `RemoteNode` record. This is handled by the `make_node_request()` utility in `config/core/request_utils.py`.
+
+### Admin management
+
+Node admins manage remote node connections at `/admin/core/remotenode/`:
+
+- **Add a node**: enter the remote node's base URL and outgoing credentials. Incoming credentials are auto-generated and displayed once.
+- **Disable a node**: uncheck `is_active` in the list view. The node's requests will be rejected with `403`.
+- **Reset incoming password**: use the "Reset incoming password" admin action to generate a new password (share the new password with the remote team).
+- **Remove a node**: delete the record. The associated Django User is also deleted.
 
 ---
 
