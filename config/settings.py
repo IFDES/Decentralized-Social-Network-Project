@@ -39,7 +39,7 @@ ALLOWED_HOSTS = [
     host.strip()
     for host in os.environ.get("ALLOWED_HOSTS", "").split(",")
     if host.strip()
-] + [".herokuapp.com"]
+] + [".herokuapp.com", "127.0.0.1", "localhost"]
 
 CSRF_TRUSTED_ORIGINS = [
     origin.strip()
@@ -70,6 +70,7 @@ MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
+    'config.core.cors.LocalCorsMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'config.core.middleware.BasicAuthMiddleware',

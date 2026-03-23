@@ -270,3 +270,220 @@ class InboxAuthTests(_InboxTestMixin, TestCase):
     def test_unsupported_type_returns_400(self):
         resp = self._post_inbox({"type": "unknown_thing"})
         self.assertEqual(resp.status_code, 400)
+
+
+class InboxLikeVisibilityTests(_InboxTestMixin, TestCase):
+    def setUp(self):
+        self._set_up_inbox()
+
+        self.remote_friend = Author.objects.create(
+            display_name="Remote Friend",
+            fqid="https://remote.example/api/authors/remote-friend-like",
+            host="https://remote.example/api/",
+            web="https://remote.example/authors/remote-friend-like",
+            is_local=False,
+        )
+        self.remote_stranger = Author.objects.create(
+            display_name="Remote Stranger",
+            fqid="https://remote.example/api/authors/remote-stranger-like",
+            host="https://remote.example/api/",
+            web="https://remote.example/authors/remote-stranger-like",
+            is_local=False,
+        )
+
+        # Mutual friendship only with remote_friend
+        FollowRelationship.objects.create(
+            follower=self.remote_friend,
+            followee=self.local_author,
+            status=FollowRelationship.Status.APPROVED,
+        )
+        FollowRelationship.objects.create(
+            follower=self.local_author,
+            followee=self.remote_friend,
+            status=FollowRelationship.Status.APPROVED,
+        )
+
+        self.friends_entry = Entry.objects.create(
+            author=self.local_author,
+            content="Friends-only content",
+            visibility=Entry.VISIBILITY_FRIENDS,
+        )
+        self.friends_comment = Comment.objects.create(
+            author=self.local_author,
+            entry=self.friends_entry,
+            comment="Friends-only comment",
+        )
+
+    def _like_payload(self, actor: Author):
+        return {
+            "type": "like",
+            "author": {
+                "type": "author",
+                "id": actor.fqid,
+                "host": actor.host,
+                "displayName": actor.display_name,
+                "web": actor.web,
+                "github": actor.github or "",
+                "profileImage": actor.profile_image or "",
+            },
+            "object": self.friends_comment.fqid,
+        }
+
+    def test_friend_remote_actor_can_like_visible_friends_comment(self):
+        resp = self._post_inbox(self._like_payload(self.remote_friend))
+        self.assertEqual(resp.status_code, 201)
+        self.assertTrue(
+            CommentLike.objects.filter(author=self.remote_friend, comment=self.friends_comment).exists()
+        )
+
+    def test_non_friend_remote_actor_cannot_like_hidden_friends_comment(self):
+        resp = self._post_inbox(self._like_payload(self.remote_stranger))
+        self.assertEqual(resp.status_code, 400)
+        self.assertFalse(
+            CommentLike.objects.filter(
+                author=self.remote_stranger,
+                comment=self.friends_comment,
+            ).exists()
+        )
+
+
+class InboxRemoteMutualFollowFriendshipTests(_InboxTestMixin, TestCase):
+    def setUp(self):
+        self._set_up_inbox()
+        self.remote_actor_data = {
+            "type": "author",
+            "id": "https://remote.example/api/authors/remote-friendship",
+            "host": "https://remote.example/api/",
+            "displayName": "Remote Friendship",
+            "web": "https://remote.example/authors/remote-friendship",
+            "github": "",
+            "profileImage": "",
+        }
+
+    def test_incoming_follow_auto_approves_when_reciprocal_exists(self):
+        remote_actor = Author.objects.create(
+            display_name="Remote Friendship",
+            fqid=self.remote_actor_data["id"],
+            host=self.remote_actor_data["host"],
+            web=self.remote_actor_data["web"],
+            is_local=False,
+        )
+        outgoing = FollowRelationship.objects.create(
+            follower=self.local_author,
+            followee=remote_actor,
+            status=FollowRelationship.Status.PENDING,
+        )
+
+        payload = {
+            "type": "follow",
+            "actor": self.remote_actor_data,
+            "object": {
+                "type": "author",
+                "id": self.local_author.fqid,
+                "host": "http://testserver/api/",
+                "displayName": self.local_author.display_name,
+                "web": self.local_author.web,
+                "github": "",
+                "profileImage": "",
+            },
+        }
+        resp = self._post_inbox(payload)
+        self.assertEqual(resp.status_code, 201)
+
+        incoming = FollowRelationship.objects.get(
+            follower=remote_actor,
+            followee=self.local_author,
+        )
+        outgoing.refresh_from_db()
+        self.assertEqual(incoming.status, FollowRelationship.Status.APPROVED)
+        self.assertEqual(outgoing.status, FollowRelationship.Status.APPROVED)
+
+
+class InboxCommentFederationTests(_InboxTestMixin, TestCase):
+    def setUp(self):
+        self._set_up_inbox()
+        self.entry = Entry.objects.create(
+            author=self.local_author,
+            content="Inbox target entry",
+            visibility=Entry.VISIBILITY_PUBLIC,
+        )
+        self.remote_author_data = {
+            "type": "author",
+            "id": "https://remote.example/api/authors/remote-commenter-1",
+            "host": "https://remote.example/api/",
+            "displayName": "Remote Commenter",
+            "web": "https://remote.example/authors/remote-commenter-1",
+            "github": "",
+            "profileImage": "",
+        }
+        self.comment_fqid = "https://remote.example/api/authors/remote-commenter-1/commented/c-1"
+
+    def test_comment_payload_creates_then_updates_idempotently(self):
+        payload = {
+            "type": "comment",
+            "id": self.comment_fqid,
+            "entry": self.entry.fqid,
+            "comment": "Original remote comment",
+            "contentType": "text/plain",
+            "author": self.remote_author_data,
+        }
+        resp1 = self._post_inbox(payload)
+        self.assertEqual(resp1.status_code, 201)
+
+        payload["comment"] = "Edited remote comment"
+        resp2 = self._post_inbox(payload)
+        self.assertEqual(resp2.status_code, 200)
+
+        comments = Comment.objects.filter(fqid=self.comment_fqid)
+        self.assertEqual(comments.count(), 1)
+        self.assertEqual(comments.first().comment, "Edited remote comment")
+
+    def test_comment_delete_payload_removes_comment(self):
+        comment = Comment.objects.create(
+            author=self.local_author,
+            entry=self.entry,
+            comment="To be deleted remotely",
+            fqid=self.comment_fqid,
+        )
+        payload = {
+            "type": "comment_delete",
+            "id": comment.fqid,
+            "entry": self.entry.fqid,
+            "author": self.remote_author_data,
+        }
+        resp = self._post_inbox(payload)
+        self.assertEqual(resp.status_code, 200)
+        self.assertFalse(Comment.objects.filter(pk=comment.pk).exists())
+
+
+class InboxLikeDeleteTests(_InboxTestMixin, TestCase):
+    def setUp(self):
+        self._set_up_inbox()
+        self.entry = Entry.objects.create(author=self.local_author, content="Like target")
+        self.remote_author_data = {
+            "type": "author",
+            "id": "https://remote.example/api/authors/remote-liker-del",
+            "host": "https://remote.example/api/",
+            "displayName": "Remote Liker Del",
+            "web": "",
+            "github": "",
+            "profileImage": "",
+        }
+        self.remote_author = Author.objects.create(
+            display_name="Remote Liker Del",
+            fqid=self.remote_author_data["id"],
+            host=self.remote_author_data["host"],
+            web=self.remote_author_data["web"],
+            is_local=False,
+        )
+
+    def test_like_delete_removes_entry_like(self):
+        EntryLike.objects.create(author=self.remote_author, entry=self.entry)
+        payload = {
+            "type": "like_delete",
+            "author": self.remote_author_data,
+            "object": self.entry.fqid,
+        }
+        resp = self._post_inbox(payload)
+        self.assertEqual(resp.status_code, 200)
+        self.assertFalse(EntryLike.objects.filter(author=self.remote_author, entry=self.entry).exists())

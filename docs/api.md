@@ -957,11 +957,19 @@ Deleted entries never expose comments. This repo does not soft-delete comments t
 #### Response
 
 - **Status**: `201 Created` with the new comment object in the body, or `400 Bad Request` if `comment` is missing, author cannot be resolved, or `contentType` is invalid.
+- **Federation behavior**: newly created local comments are fanned out to relevant remote inboxes as `type: "comment"` payloads.
 
 ### GET /api/authors/{AUTHOR_SERIAL}/entries/{ENTRY_SERIAL}/comments/{COMMENT_REF}
 
 - **When to use**: Fetch a single comment by UUID or by FQID (comment ref may be the comment UUID or the percent-encoded comment FQID).
 - **Response**: `200 OK` with a single `comment` object, or `404 Not Found` if the comment does not exist or is not visible to the current viewer.
+
+### DELETE /api/authors/{AUTHOR_SERIAL}/entries/{ENTRY_SERIAL}/comments/{COMMENT_REF}
+
+- **When to use**: Delete a comment authored by the authenticated/requested author.
+- **Auth**: Author must be identified via session or request body (`authorId`), and must match the comment author.
+- **Response**: `204 No Content` on success, `403` for non-author, `404` if comment is not visible/found.
+- **Federation behavior**: successful local deletions are fanned out as `type: "comment_delete"` inbox payloads to keep remote copies consistent.
 
 ---
 
@@ -1093,6 +1101,7 @@ Content-Type: application/json
 - **Status**: `204 No Content` on success (even if there was no like).
 - **Status**: `400 Bad Request` if author cannot be resolved.
 - **Status**: `404 Not Found` if the entry or comment does not exist, is hidden from the caller, or does not match the path.
+- **Federation behavior**: if a like existed and is removed locally, a `type: "like_delete"` inbox payload is sent to relevant remote inboxes.
 
 ### UI: Comment Like/Unlike
 
@@ -1519,9 +1528,13 @@ GET /api/authors/11111111-1111-1111-1111-111111111111/github
 
 #### Like payload
 
-The `object` field determines whether this is an entry-like or a comment-like:
-- Entry FQID (contains `/entries/`): creates an `EntryLike`
-- Comment FQID (contains `/commented/`): creates a `CommentLike`
+The `object` field is resolved by exact FQID lookup on this node:
+- If the FQID matches a local entry, creates an `EntryLike`
+- If the FQID matches a local comment, creates a `CommentLike`
+
+Access control is enforced before creation:
+- Entry likes require the remote actor to be able to view that entry under current visibility rules.
+- Comment likes require the remote actor to be able to view that comment under the same shared comment-visibility logic used by stream/detail APIs.
 
 ```json
 {
@@ -1571,6 +1584,10 @@ Distribution uses `make_node_request()` to POST the entry payload to each recipi
 
 ## Comment-Like Distribution (Outgoing)
 
-When a local author likes a comment on an entry owned by a remote author, the node sends a `like` payload to the remote entry author's inbox so the remote node is aware of the interaction.
+When a local author likes a comment, the node fans out a `like` payload to relevant remote inboxes that should already know about the content (for example: remote comment/entry authors and eligible remote recipients by follow/friend rules).
 
 Likes on comments of locally-authored entries do not trigger outgoing distribution (the like is already stored locally).
+
+Loop prevention rule:
+- Outgoing distribution happens only for local user actions (UI/API endpoints).
+- Inbox-ingested likes are persisted locally but are **not** re-forwarded to other nodes.

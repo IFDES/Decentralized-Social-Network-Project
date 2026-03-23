@@ -88,9 +88,15 @@ def distribute_entry_to_remote_followers(entry: Entry) -> None:
 
     - PUBLIC entries → all remote APPROVED followers
     - FRIENDS entries → only remote friends (mutual APPROVED follow)
-    - UNLISTED / DELETED entries → not distributed
+    - DELETED entries → remote approved followers and remote friends (best effort
+      to notify all nodes that may have received an earlier version)
+    - UNLISTED entries → not distributed
     """
-    if entry.visibility not in (Entry.VISIBILITY_PUBLIC, Entry.VISIBILITY_FRIENDS):
+    if entry.visibility not in (
+        Entry.VISIBILITY_PUBLIC,
+        Entry.VISIBILITY_FRIENDS,
+        Entry.VISIBILITY_DELETED,
+    ):
         return
 
     author = entry.author
@@ -107,12 +113,29 @@ def distribute_entry_to_remote_followers(entry: Entry) -> None:
             .values_list("follower", flat=True)
         )
         recipients = Author.objects.filter(pk__in=remote_followers, is_deleted=False)
-    else:
+    elif entry.visibility == Entry.VISIBILITY_FRIENDS:
         # FRIENDS visibility: mutual APPROVED follow, remote only
         friends = FollowRelationship.friends_of(author).filter(is_local=False)
         recipients = friends
+    else:
+        # DELETED: notify both remote approved followers and remote friends.
+        remote_follower_ids = (
+            FollowRelationship.objects.filter(
+                followee=author,
+                status=FollowRelationship.Status.APPROVED,
+                follower__is_local=False,
+            ).values_list("follower_id", flat=True)
+        )
+        remote_friend_ids = FollowRelationship.friends_of(author).filter(
+            is_local=False
+        ).values_list("uuid", flat=True)
+        recipients = Author.objects.filter(
+            pk__in=set(remote_follower_ids).union(set(remote_friend_ids)),
+            is_deleted=False,
+        )
 
     payload = _entry_to_inbox_json(entry)
+    sent_targets: set[tuple[str, str]] = set()
 
     for recipient in recipients:
         node = _remote_node_for_author(recipient)
@@ -128,6 +151,10 @@ def distribute_entry_to_remote_followers(entry: Entry) -> None:
             recipient_uuid = str(recipient.uuid)
 
         inbox_path = f"api/authors/{recipient_uuid}/inbox"
+        target_key = (str(node.base_url), inbox_path)
+        if target_key in sent_targets:
+            continue
+        sent_targets.add(target_key)
 
         try:
             resp = make_node_request(node, "POST", inbox_path, json=payload)

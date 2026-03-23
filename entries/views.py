@@ -25,6 +25,14 @@ from config.core.permissions import user_matches_author_uuid
 from follows.models import FollowRelationship
 from interactions.models import Comment, CommentLike, EntryLike
 from interactions.serializers import comments_list_json, likes_list_json
+from interactions.distribution import (
+    distribute_entry_like_delete_to_remote,
+    distribute_entry_like_to_remote,
+    distribute_comment_delete_to_remote,
+    distribute_comment_like_delete_to_remote,
+    distribute_comment_like_to_remote,
+    distribute_comment_to_remote,
+)
 
 from .distribution import distribute_entry_to_remote_followers
 from .forms import EntryDeleteForm, EntryForm
@@ -417,12 +425,13 @@ def entry_comment_create_page(
     content_type = request.POST.get("content_type") or Comment.CONTENT_TEXT_PLAIN
     if content_type not in dict(Comment.CONTENT_TYPE_CHOICES):
         content_type = Comment.CONTENT_TEXT_PLAIN
-    Comment.objects.create(
+    comment = Comment.objects.create(
         author=comment_author,
         entry=entry,
         comment=comment_text,
         content_type=content_type,
     )
+    distribute_comment_to_remote(comment)
     return redirect("entries:entry-detail", author_id=author.uuid, entry_id=entry.uuid)
 
 
@@ -446,7 +455,9 @@ def entry_like_page(
                 pass
     if not like_author:
         return HttpResponseBadRequest("Unable to determine like author.")
-    EntryLike.objects.get_or_create(author=like_author, entry=entry)
+    like, created = EntryLike.objects.get_or_create(author=like_author, entry=entry)
+    if created:
+        distribute_entry_like_to_remote(like)
     return redirect("entries:entry-detail", author_id=author.uuid, entry_id=entry.uuid)
 
 
@@ -470,7 +481,10 @@ def entry_unlike_page(
                 pass
     if not like_author:
         return HttpResponseBadRequest("Unable to determine like author.")
-    EntryLike.objects.filter(author=like_author, entry=entry).delete()
+    existing_like = EntryLike.objects.filter(author=like_author, entry=entry).first()
+    if existing_like:
+        distribute_entry_like_delete_to_remote(existing_like)
+        existing_like.delete()
     return redirect("entries:entry-detail", author_id=author.uuid, entry_id=entry.uuid)
 
 
@@ -480,11 +494,7 @@ def comment_like_page(
 ) -> HttpResponse:
     author = get_object_or_404(Author, pk=author_id, is_deleted=False)
     entry = get_object_or_404(Entry, pk=entry_id, author=author, is_deleted=False)
-    viewer = _get_current_author(request)
-    if not _can_view_entry_detail(request, entry, viewer):
-        return HttpResponseForbidden("You do not have permission to access this entry.")
-        
-    comment = get_object_or_404(Comment, pk=comment_id, entry=entry)
+
     like_author = _get_current_author(request)
     if not like_author:
         author_pk = request.POST.get("author_id")
@@ -495,7 +505,18 @@ def comment_like_page(
                 pass
     if not like_author:
         return HttpResponseBadRequest("Unable to determine like author.")
-    CommentLike.objects.get_or_create(author=like_author, comment=comment)
+
+    # Comment-like permissions follow the same visibility rules as comment listing.
+    visible_comments = get_visible_comments_queryset(
+        entry,
+        like_author,
+        is_admin=_is_node_admin(request),
+    )
+    comment = get_object_or_404(visible_comments, pk=comment_id)
+
+    like, created = CommentLike.objects.get_or_create(author=like_author, comment=comment)
+    if created:
+        distribute_comment_like_to_remote(like)
     return redirect("entries:entry-detail", author_id=author.uuid, entry_id=entry.uuid)
 
 
@@ -505,11 +526,7 @@ def comment_unlike_page(
 ) -> HttpResponse:
     author = get_object_or_404(Author, pk=author_id, is_deleted=False)
     entry = get_object_or_404(Entry, pk=entry_id, author=author, is_deleted=False)
-    viewer = _get_current_author(request)
-    if not _can_view_entry_detail(request, entry, viewer):
-        return HttpResponseForbidden("You do not have permission to access this entry.")
-        
-    comment = get_object_or_404(Comment, pk=comment_id, entry=entry)
+
     like_author = _get_current_author(request)
     if not like_author:
         author_pk = request.POST.get("author_id")
@@ -520,7 +537,49 @@ def comment_unlike_page(
                 pass
     if not like_author:
         return HttpResponseBadRequest("Unable to determine like author.")
-    CommentLike.objects.filter(author=like_author, comment=comment).delete()
+
+    visible_comments = get_visible_comments_queryset(
+        entry,
+        like_author,
+        is_admin=_is_node_admin(request),
+    )
+    comment = get_object_or_404(visible_comments, pk=comment_id)
+    existing_like = CommentLike.objects.filter(author=like_author, comment=comment).first()
+    if existing_like:
+        distribute_comment_like_delete_to_remote(existing_like)
+        existing_like.delete()
+    return redirect("entries:entry-detail", author_id=author.uuid, entry_id=entry.uuid)
+
+
+@require_http_methods(["POST"])
+def comment_delete_page(
+    request: HttpRequest, author_id: UUID, entry_id: UUID, comment_id: UUID
+) -> HttpResponse:
+    author = get_object_or_404(Author, pk=author_id, is_deleted=False)
+    entry = get_object_or_404(Entry, pk=entry_id, author=author, is_deleted=False)
+
+    current_author = _get_current_author(request)
+    if not current_author:
+        author_pk = request.POST.get("author_id")
+        if author_pk:
+            try:
+                current_author = Author.objects.get(pk=UUID(author_pk), is_deleted=False)
+            except (ValueError, Author.DoesNotExist):
+                pass
+    if not current_author:
+        return HttpResponseBadRequest("Unable to determine comment author.")
+
+    visible_comments = get_visible_comments_queryset(
+        entry,
+        current_author,
+        is_admin=_is_node_admin(request),
+    )
+    comment = get_object_or_404(visible_comments, pk=comment_id)
+    if comment.author_id != current_author.id:
+        return HttpResponseForbidden("Only the comment author may delete this comment.")
+
+    distribute_comment_delete_to_remote(comment)
+    comment.delete()
     return redirect("entries:entry-detail", author_id=author.uuid, entry_id=entry.uuid)
 
 
@@ -634,6 +693,7 @@ def entry_delete_page(
             entry.visibility = Entry.VISIBILITY_DELETED
             entry.deleted_at = datetime.now(timezone.utc)
             entry.save()
+            distribute_entry_to_remote_followers(entry)
             return redirect("authors:profile", author_id=author.uuid)
     else:
         form = EntryDeleteForm()
@@ -950,4 +1010,5 @@ def entry_detail_api(
     entry.visibility = Entry.VISIBILITY_DELETED
     entry.deleted_at = datetime.now(timezone.utc)
     entry.save()
+    distribute_entry_to_remote_followers(entry)
     return HttpResponse(status=204)

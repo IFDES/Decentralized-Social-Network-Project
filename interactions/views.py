@@ -23,7 +23,14 @@ from entries.visibility import (
 )
 
 from .models import Comment, CommentLike, EntryLike
-from .distribution import distribute_comment_like_to_remote
+from .distribution import (
+    distribute_entry_like_delete_to_remote,
+    distribute_entry_like_to_remote,
+    distribute_comment_like_delete_to_remote,
+    distribute_comment_like_to_remote,
+    distribute_comment_delete_to_remote,
+    distribute_comment_to_remote,
+)
 from .serializers import (
     comment_like_to_json,
     comment_likes_list_json,
@@ -181,12 +188,13 @@ def entry_comments_api(request: HttpRequest, author_id: UUID, entry_id: UUID) ->
         comment=comment_text,
         content_type=content_type,
     )
+    distribute_comment_to_remote(comment)
 
     return JsonResponse(comment_to_json(comment), status=201)
 
 
 @csrf_exempt
-@require_http_methods(["GET"])
+@require_http_methods(["GET", "DELETE"])
 def entry_comment_detail_api(
     request: HttpRequest, author_id: UUID, entry_id: UUID, comment_ref: str
 ) -> HttpResponse:
@@ -217,7 +225,22 @@ def entry_comment_detail_api(
         except Comment.DoesNotExist:
             return JsonResponse({"detail": "Comment not found."}, status=404)
 
-    return JsonResponse(comment_to_json(comment))
+    if request.method == "GET":
+        return JsonResponse(comment_to_json(comment))
+
+    try:
+        payload = _parse_json_body(request) if request.body else {}
+    except ValueError:
+        payload = {}
+    actor = _resolve_comment_author(request, payload)
+    if not actor:
+        return HttpResponseBadRequest("Unable to resolve comment author.")
+    if actor.pk != comment.author_id:
+        return JsonResponse({"detail": "Only the comment author may delete this comment."}, status=403)
+
+    distribute_comment_delete_to_remote(comment)
+    comment.delete()
+    return HttpResponse(status=204)
 
 
 @csrf_exempt
@@ -254,11 +277,16 @@ def entry_likes_api(request: HttpRequest, author_id: UUID, entry_id: UUID) -> Ht
             author=author,
             entry=entry,
         )
+        if created:
+            distribute_entry_like_to_remote(like)
         status_code = 201 if created else 200
         return JsonResponse(like_to_json(like), status=status_code)
 
     # DELETE: unlike
-    EntryLike.objects.filter(author=author, entry=entry).delete()
+    existing_like = EntryLike.objects.filter(author=author, entry=entry).first()
+    if existing_like:
+        distribute_entry_like_delete_to_remote(existing_like)
+        existing_like.delete()
     return HttpResponse(status=204)
 
 
@@ -321,5 +349,8 @@ def comment_likes_api(
 
         return JsonResponse(comment_like_to_json(cl), status=status_code)
 
-    CommentLike.objects.filter(author=author, comment=comment).delete()
+    existing_like = CommentLike.objects.filter(author=author, comment=comment).first()
+    if existing_like:
+        distribute_comment_like_delete_to_remote(existing_like)
+        existing_like.delete()
     return HttpResponse(status=204)

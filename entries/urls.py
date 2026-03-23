@@ -63,6 +63,11 @@ urlpatterns = [
         name="comment-unlike",
     ),
     path(
+        "authors/<uuid:author_id>/entries/<uuid:entry_id>/comments/<uuid:comment_id>/delete/",
+        views.comment_delete_page,
+        name="comment-delete",
+    ),
+    path(
         "authors/<uuid:author_id>/entries/<uuid:entry_id>/edit/",
         views.entry_edit_page,
         name="entry-edit",
