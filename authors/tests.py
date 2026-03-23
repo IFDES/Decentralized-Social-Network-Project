@@ -251,7 +251,7 @@ class SignupTests(TestCase):
             },
         )
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "Passwords do not match")
+        self.assertContains(response, "didn’t match")
         self.assertFalse(User.objects.filter(username="mismatch").exists())
 
     def test_signup_duplicate_username(self):
@@ -282,6 +282,32 @@ class SignupTests(TestCase):
         self.assertEqual(response.status_code, 200)
         # The form should not create a user when a required field is missing.
         self.assertFalse(User.objects.filter(username="nodisplay").exists())
+
+    def test_signup_rejects_invalid_username_characters(self):
+        response = self.client.post(
+            reverse("signup"),
+            data={
+                "username": "test/user",
+                "display_name": "Bad Username",
+                "password1": "strongPass99",
+                "password2": "strongPass99",
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(User.objects.filter(username="test/user").exists())
+
+    def test_signup_rejects_weak_password_like_admin(self):
+        response = self.client.post(
+            reverse("signup"),
+            data={
+                "username": "weakpassuser",
+                "display_name": "Weak Password",
+                "password1": "12345678",
+                "password2": "12345678",
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(User.objects.filter(username="weakpassuser").exists())
 
 
 class LogoutTests(TestCase):
