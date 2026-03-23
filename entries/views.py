@@ -26,6 +26,7 @@ from follows.models import FollowRelationship
 from interactions.models import Comment, CommentLike, EntryLike
 from interactions.serializers import comments_list_json, likes_list_json
 
+from .distribution import distribute_entry_to_remote_followers
 from .forms import EntryDeleteForm, EntryForm
 from .models import Entry, HostedImage
 from .visibility import (
@@ -543,6 +544,10 @@ def entry_create_page(request: HttpRequest, author_id: UUID) -> HttpResponse:
                 entry=entry,
             )
             entry.save(update_fields=["updated_at"])
+
+            # Fan out to remote followers / friends
+            distribute_entry_to_remote_followers(entry)
+
             return redirect("entries:entry-detail", author_id=author.uuid, entry_id=entry.uuid)
     else:
         form = EntryForm()
@@ -881,6 +886,9 @@ def author_entries_api(request: HttpRequest, author_id: UUID) -> HttpResponse:
         content_type=content_type,
         visibility=visibility,
     )
+
+    # Fan out to remote followers / friends
+    distribute_entry_to_remote_followers(entry)
 
     return JsonResponse(_entry_to_json(request, entry), status=201)
 

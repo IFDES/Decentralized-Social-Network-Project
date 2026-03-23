@@ -579,3 +579,97 @@ class DeletedEntryEdgeCaseTests(TestCase):
             content_type="application/json",
         )
         self.assertEqual(response.status_code, 400)
+
+
+class CommentLikeDistributionTests(TestCase):
+    """Tests for interactions/distribution.py comment-like fan-out."""
+
+    def setUp(self):
+        from config.core.models import RemoteNode
+
+        self.local_author = Author.objects.create(
+            display_name="Local Liker",
+            is_local=True,
+        )
+
+        # Remote entry author
+        self.remote_entry_author = Author.objects.create(
+            display_name="Remote Entry Author",
+            fqid="https://remote.example/api/authors/rea-1",
+            host="https://remote.example/api/",
+            web="https://remote.example/authors/rea-1",
+            is_local=False,
+        )
+
+        # Local entry author
+        self.local_entry_author = Author.objects.create(
+            display_name="Local Entry Author",
+            is_local=True,
+        )
+
+        # Remote node record
+        self.node_user = User.objects.create_user(username="node-remote-cl", password="nodepass")
+        self.remote_node = RemoteNode(
+            display_name="Remote CL Node",
+            base_url="https://remote.example",
+            outgoing_username="us",
+            outgoing_password="pw",
+        )
+        self.remote_node.node_user = self.node_user
+        super(RemoteNode, self.remote_node).save()
+
+        # Entries
+        self.remote_entry = Entry.objects.create(
+            author=self.remote_entry_author,
+            content="Remote entry",
+        )
+        self.local_entry = Entry.objects.create(
+            author=self.local_entry_author,
+            content="Local entry",
+        )
+
+        # Comments
+        self.remote_comment = Comment.objects.create(
+            author=self.remote_entry_author,
+            entry=self.remote_entry,
+            comment="A comment on remote entry",
+        )
+        self.local_comment = Comment.objects.create(
+            author=self.local_entry_author,
+            entry=self.local_entry,
+            comment="A comment on local entry",
+        )
+
+    def test_liking_comment_on_remote_entry_sends_to_remote(self):
+        from unittest.mock import patch, MagicMock
+        from interactions.distribution import distribute_comment_like_to_remote
+
+        cl = CommentLike.objects.create(
+            author=self.local_author,
+            comment=self.remote_comment,
+        )
+
+        with patch("interactions.distribution.make_node_request") as mock_req:
+            mock_req.return_value = MagicMock(status_code=201)
+            distribute_comment_like_to_remote(cl)
+
+        mock_req.assert_called_once()
+        args, kwargs = mock_req.call_args
+        self.assertEqual(args[1], "POST")
+        self.assertIn("inbox", args[2])
+        self.assertEqual(kwargs["json"]["type"], "like")
+
+    def test_liking_comment_on_local_entry_does_not_send(self):
+        from unittest.mock import patch
+        from interactions.distribution import distribute_comment_like_to_remote
+
+        cl = CommentLike.objects.create(
+            author=self.local_author,
+            comment=self.local_comment,
+        )
+
+        with patch("interactions.distribution.make_node_request") as mock_req:
+            distribute_comment_like_to_remote(cl)
+
+        mock_req.assert_not_called()
+

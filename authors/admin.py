@@ -30,3 +30,4 @@ class AuthorAdmin(admin.ModelAdmin):
 class AuthorAccountAdmin(admin.ModelAdmin):
     list_display = ("user", "author")
     search_fields = ("user__username", "user__email", "author__display_name", "author__fqid")
+

@@ -1450,3 +1450,127 @@ GET /api/authors/11111111-1111-1111-1111-111111111111/github
 }
 ```
 
+---
+
+## Inbox API
+
+### POST /api/authors/{AUTHOR_SERIAL}/inbox
+
+- **Purpose**: Receive remote payloads from other nodes. This is the primary endpoint for inter-node communication (federation).
+- **Auth**: Must be authenticated as a remote node (HTTP Basic Auth via `RemoteNode` credentials).
+
+#### Accepted payload types
+
+| `type` field | Purpose | Handler |
+|-------------|---------|---------|
+| `"follow"` | Follow request from a remote author | Creates/updates `FollowRelationship` |
+| `"entry"` | Entry pushed by a remote author to a local follower's inbox | Creates/updates local `Entry` record |
+| `"like"` | Like from a remote author on a local entry or comment | Creates `EntryLike` or `CommentLike` |
+
+#### Follow payload
+
+```json
+{
+  "type": "follow",
+  "actor": {
+    "type": "author",
+    "id": "https://remote.example/api/authors/remote-uuid",
+    "host": "https://remote.example/api/",
+    "displayName": "Remote Author",
+    "web": "https://remote.example/authors/remote-uuid",
+    "github": "",
+    "profileImage": ""
+  },
+  "object": {
+    "type": "author",
+    "id": "http://127.0.0.1:8000/api/authors/local-uuid",
+    "displayName": "Local Author"
+  }
+}
+```
+
+**Response**: `201 Created` with follow state.
+
+#### Entry payload
+
+```json
+{
+  "type": "entry",
+  "id": "https://remote.example/api/authors/remote-uuid/entries/entry-uuid",
+  "title": "Remote Post Title",
+  "content": "Post body text",
+  "contentType": "text/plain",
+  "visibility": "PUBLIC",
+  "web": "https://remote.example/authors/remote-uuid/entries/entry-uuid",
+  "author": {
+    "type": "author",
+    "id": "https://remote.example/api/authors/remote-uuid",
+    "host": "https://remote.example/api/",
+    "displayName": "Remote Author",
+    "web": "https://remote.example/authors/remote-uuid",
+    "github": "",
+    "profileImage": ""
+  },
+  "published": "2026-03-22T12:00:00+00:00"
+}
+```
+
+**Response**: `201 Created` if new entry, `200 OK` if updated (deduped by FQID).
+
+#### Like payload
+
+The `object` field determines whether this is an entry-like or a comment-like:
+- Entry FQID (contains `/entries/`): creates an `EntryLike`
+- Comment FQID (contains `/commented/`): creates a `CommentLike`
+
+```json
+{
+  "type": "like",
+  "author": {
+    "type": "author",
+    "id": "https://remote.example/api/authors/remote-liker",
+    "host": "https://remote.example/api/",
+    "displayName": "Remote Liker",
+    "web": "https://remote.example/authors/remote-liker",
+    "github": "",
+    "profileImage": ""
+  },
+  "object": "http://127.0.0.1:8000/api/authors/local-uuid/entries/entry-uuid"
+}
+```
+
+**Response**: `201 Created` if new like, `200 OK` if already existed (idempotent).
+
+#### Status codes
+
+| Status | Meaning |
+|--------|---------|
+| `201 Created` | Payload accepted and new record created |
+| `200 OK` | Payload accepted, record already existed (idempotent) |
+| `400 Bad Request` | Invalid JSON, missing required fields, or unsupported type |
+| `401 Unauthorized` | Missing or invalid node credentials |
+| `403 Forbidden` | Node is disabled, or caller is not a remote node |
+| `404 Not Found` | Target local author not found |
+
+---
+
+## Entry Distribution (Outgoing)
+
+When a local author creates an entry (via API or UI), the node automatically distributes it to remote followers' inboxes:
+
+| Entry visibility | Recipients |
+|-----------------|------------|
+| `PUBLIC` | All remote authors with an APPROVED follow on the entry author |
+| `FRIENDS` | Only remote authors who are mutual friends (both directions APPROVED) |
+| `UNLISTED` | Not distributed (accessible only via direct link) |
+| `DELETED` | Not distributed |
+
+Distribution uses `make_node_request()` to POST the entry payload to each recipient's inbox. Disabled nodes and unreachable nodes are silently skipped.
+
+---
+
+## Comment-Like Distribution (Outgoing)
+
+When a local author likes a comment on an entry owned by a remote author, the node sends a `like` payload to the remote entry author's inbox so the remote node is aware of the interaction.
+
+Likes on comments of locally-authored entries do not trigger outgoing distribution (the like is already stored locally).

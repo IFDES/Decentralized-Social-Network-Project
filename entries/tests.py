@@ -1052,3 +1052,140 @@ class HostedImageVisibilityTests(TestCase):
             followee=self.author,
             status=FollowRelationship.Status.APPROVED,
         )
+
+
+class EntryDistributionTests(TestCase):
+    """Tests for entries/distribution.py fan-out logic."""
+
+    def setUp(self):
+        from config.core.models import RemoteNode
+
+        self.local_author = Author.objects.create(
+            display_name="Local Author",
+            is_local=True,
+        )
+        self.local_user = User.objects.create_user(username="distrib_user", password="pass12345")
+        AuthorAccount.objects.create(user=self.local_user, author=self.local_author)
+
+        # Remote follower
+        self.remote_follower = Author.objects.create(
+            display_name="Remote Follower",
+            fqid="https://remote.example/api/authors/rf-1",
+            host="https://remote.example/api/",
+            web="https://remote.example/authors/rf-1",
+            is_local=False,
+        )
+
+        # Approved follow: remote_follower → local_author
+        FollowRelationship.objects.create(
+            follower=self.remote_follower,
+            followee=self.local_author,
+            status=FollowRelationship.Status.APPROVED,
+        )
+
+        # Remote node record
+        self.node_user = User.objects.create_user(username="node-remote-dist", password="nodepass")
+        self.remote_node = RemoteNode(
+            display_name="Remote Test Node",
+            base_url="https://remote.example",
+            outgoing_username="us_to_them",
+            outgoing_password="secret",
+        )
+        self.remote_node.node_user = self.node_user
+        from django.db import models
+        super(RemoteNode, self.remote_node).save()
+
+    def test_public_entry_distributed_to_remote_follower(self):
+        from unittest.mock import patch, MagicMock
+        from entries.distribution import distribute_entry_to_remote_followers
+
+        entry = Entry.objects.create(
+            author=self.local_author,
+            title="Hello remote!",
+            content="Distributed content",
+            visibility=Entry.VISIBILITY_PUBLIC,
+        )
+
+        with patch("entries.distribution.make_node_request") as mock_req:
+            mock_req.return_value = MagicMock(status_code=201)
+            distribute_entry_to_remote_followers(entry)
+
+        mock_req.assert_called_once()
+        args, kwargs = mock_req.call_args
+        self.assertEqual(args[0], self.remote_node)
+        self.assertEqual(args[1], "POST")
+        self.assertIn("inbox", args[2])
+        self.assertEqual(kwargs["json"]["type"], "entry")
+        self.assertEqual(kwargs["json"]["content"], "Distributed content")
+
+    def test_unlisted_entry_not_distributed(self):
+        from unittest.mock import patch, MagicMock
+        from entries.distribution import distribute_entry_to_remote_followers
+
+        entry = Entry.objects.create(
+            author=self.local_author,
+            content="Unlisted",
+            visibility=Entry.VISIBILITY_UNLISTED,
+        )
+
+        with patch("entries.distribution.make_node_request") as mock_req:
+            distribute_entry_to_remote_followers(entry)
+
+        mock_req.assert_not_called()
+
+    def test_friends_entry_only_distributed_to_friends_not_followers(self):
+        from unittest.mock import patch, MagicMock
+        from entries.distribution import distribute_entry_to_remote_followers
+
+        # remote_follower is NOT a friend (no reverse follow), so should NOT receive FRIENDS entry
+        entry = Entry.objects.create(
+            author=self.local_author,
+            content="Friends only",
+            visibility=Entry.VISIBILITY_FRIENDS,
+        )
+
+        with patch("entries.distribution.make_node_request") as mock_req:
+            distribute_entry_to_remote_followers(entry)
+
+        mock_req.assert_not_called()
+
+    def test_friends_entry_distributed_to_remote_friend(self):
+        from unittest.mock import patch, MagicMock
+        from entries.distribution import distribute_entry_to_remote_followers
+
+        # Make it mutual (friend)
+        FollowRelationship.objects.create(
+            follower=self.local_author,
+            followee=self.remote_follower,
+            status=FollowRelationship.Status.APPROVED,
+        )
+
+        entry = Entry.objects.create(
+            author=self.local_author,
+            content="Friends only content",
+            visibility=Entry.VISIBILITY_FRIENDS,
+        )
+
+        with patch("entries.distribution.make_node_request") as mock_req:
+            mock_req.return_value = MagicMock(status_code=201)
+            distribute_entry_to_remote_followers(entry)
+
+        mock_req.assert_called_once()
+        self.assertEqual(mock_req.call_args[1]["json"]["content"], "Friends only content")
+
+    def test_disabled_node_silently_skipped(self):
+        from unittest.mock import patch
+        from config.core.authentication import NodeDisabled
+        from entries.distribution import distribute_entry_to_remote_followers
+
+        entry = Entry.objects.create(
+            author=self.local_author,
+            content="Should skip disabled",
+            visibility=Entry.VISIBILITY_PUBLIC,
+        )
+
+        with patch("entries.distribution.make_node_request", side_effect=NodeDisabled("disabled")) as mock_req:
+            # Should not raise
+            distribute_entry_to_remote_followers(entry)
+
+        mock_req.assert_called_once()

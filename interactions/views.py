@@ -23,6 +23,7 @@ from entries.visibility import (
 )
 
 from .models import Comment, CommentLike, EntryLike
+from .distribution import distribute_comment_like_to_remote
 from .serializers import (
     comment_like_to_json,
     comment_likes_list_json,
@@ -313,6 +314,11 @@ def comment_likes_api(
             comment=comment,
         )
         status_code = 201 if created else 200
+
+        # Distribute to remote entry author's inbox if applicable
+        if created:
+            distribute_comment_like_to_remote(cl)
+
         return JsonResponse(comment_like_to_json(cl), status=status_code)
 
     CommentLike.objects.filter(author=author, comment=comment).delete()
