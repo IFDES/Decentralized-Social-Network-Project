@@ -5,6 +5,7 @@ from django.test import Client, TestCase
 from django.urls import reverse
 
 from .models import Author, AuthorAccount
+from entries.models import Entry
 
 
 class AuthorProfileTests(TestCase):
@@ -40,6 +41,23 @@ class AuthorProfileTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Alice")
+
+    def test_profile_page_uses_local_entry_route_for_local_entries(self):
+        entry = Entry.objects.create(
+            author=self.author,
+            title="Local entry",
+            content="Body",
+            web="http://127.0.0.1:8000/authors/bad/entries/bad",
+        )
+
+        response = self.client.get(reverse("authors:profile", args=[self.author.uuid]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(
+            response,
+            reverse("entries:entry-detail", args=[self.author.uuid, entry.uuid]),
+        )
+        self.assertNotContains(response, "http://127.0.0.1:8000/authors/bad/entries/bad")
 
     def test_api_get_author(self):
         response = self.client.get(reverse("authors:profile_api", args=[self.author.uuid]))

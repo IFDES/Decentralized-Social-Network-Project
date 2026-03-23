@@ -972,12 +972,14 @@ class EntryShareLinkTemplateTests(TestCase):
             title="Public share",
             content="Body",
             visibility=Entry.VISIBILITY_PUBLIC,
+            web="http://127.0.0.1:8000/authors/bad/entries/bad",
         )
         url = reverse("entries:entry-detail", args=[self.author.uuid, entry.uuid])
 
         response = self.client.get(url)
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, str(entry.web))
+        self.assertContains(response, url)
+        self.assertNotContains(response, "http://127.0.0.1:8000/authors/bad/entries/bad")
 
     def test_unlisted_entry_detail_page_shows_shareable_link(self):
         entry = Entry.objects.create(
@@ -985,12 +987,14 @@ class EntryShareLinkTemplateTests(TestCase):
             title="Unlisted share",
             content="Body",
             visibility=Entry.VISIBILITY_UNLISTED,
+            web="http://127.0.0.1:8000/authors/bad/entries/bad",
         )
         url = reverse("entries:entry-detail", args=[self.author.uuid, entry.uuid])
 
         response = self.client.get(url)
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, str(entry.web))
+        self.assertContains(response, url)
+        self.assertNotContains(response, "http://127.0.0.1:8000/authors/bad/entries/bad")
 
     def test_friends_only_entry_detail_page_does_not_show_shareable_link(self):
         entry = Entry.objects.create(

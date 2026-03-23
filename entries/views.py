@@ -380,6 +380,20 @@ def entry_detail_page(
         c.current_user_has_liked = c.uuid in user_liked_comments
 
     authors = list(Author.objects.filter(is_deleted=False).order_by("display_name"))
+    if entry.author.is_local and entry.visibility in (
+        Entry.VISIBILITY_PUBLIC,
+        Entry.VISIBILITY_UNLISTED,
+    ):
+        shareable_link = reverse(
+            "entries:entry-detail",
+            args=[author.uuid, entry.uuid],
+        )
+    else:
+        shareable_link = entry.web if entry.visibility in (
+            Entry.VISIBILITY_PUBLIC,
+            Entry.VISIBILITY_UNLISTED,
+        ) else ""
+
     return render(
         request,
         "entries/entry_detail.html",
@@ -391,10 +405,7 @@ def entry_detail_page(
             "current_author": current_author,
             "current_user_has_liked": current_user_has_liked,
             "authors": authors,
-            "shareable_link": entry.web if entry.visibility in (
-                Entry.VISIBILITY_PUBLIC,
-                Entry.VISIBILITY_UNLISTED,
-            ) else "",
+            "shareable_link": shareable_link,
         },
     )
 
