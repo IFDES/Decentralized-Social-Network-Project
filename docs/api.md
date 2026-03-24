@@ -959,17 +959,66 @@ Deleted entries never expose comments. This repo does not soft-delete comments t
 - **Status**: `201 Created` with the new comment object in the body, or `400 Bad Request` if `comment` is missing, author cannot be resolved, or `contentType` is invalid.
 - **Federation behavior**: newly created local comments are fanned out to relevant remote inboxes as `type: "comment"` payloads.
 
+#### Example request
+
+Session-authenticated callers may omit `authorId` (the server uses the logged-in author). Remote clients or tests often pass the commenting author explicitly:
+
+```http
+POST /api/authors/8d35d13e-f0ee-468d-bd6f-f942ec660f43/entries/d25343a5-c5cf-4734-b8cf-11211f7af26f/comments
+Content-Type: application/json
+
+{
+  "authorId": "11111111-1111-1111-1111-111111111111",
+  "comment": "Great post!",
+  "contentType": "text/plain"
+}
+```
+
+You may also identify the author with a nested `author` object (`id` / `fqid` / `uuid`) or top-level `author_id` / `authorId` strings (same resolution rules as entry likes).
+
+#### Example response (`201 Created`)
+
+```json
+{
+  "type": "comment",
+  "author": {
+    "type": "author",
+    "id": "http://127.0.0.1:8000/api/authors/11111111-1111-1111-1111-111111111111",
+    "host": "http://127.0.0.1:8000/api/",
+    "displayName": "Commenter",
+    "web": "http://127.0.0.1:8000/authors/11111111-1111-1111-1111-111111111111",
+    "github": "",
+    "profileImage": ""
+  },
+  "comment": "Great post!",
+  "contentType": "text/plain",
+  "published": "2026-03-16T12:00:00+00:00",
+  "id": "http://127.0.0.1:8000/api/authors/11111111-1111-1111-1111-111111111111/commented/a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  "entry": "http://127.0.0.1:8000/api/authors/8d35d13e-f0ee-468d-bd6f-f942ec660f43/entries/d25343a5-c5cf-4734-b8cf-11211f7af26f",
+  "web": "http://127.0.0.1:8000/authors/8d35d13e-f0ee-468d-bd6f-f942ec660f43/entries/d25343a5-c5cf-4734-b8cf-11211f7af26f"
+}
+```
+
 ### GET /api/authors/{AUTHOR_SERIAL}/entries/{ENTRY_SERIAL}/comments/{COMMENT_REF}
 
 - **When to use**: Fetch a single comment by UUID or by FQID (comment ref may be the comment UUID or the percent-encoded comment FQID).
-- **Response**: `200 OK` with a single `comment` object, or `404 Not Found` if the comment does not exist or is not visible to the current viewer.
+- **Behaviour**: The server loads the comment for this entry, then checks **comment visibility** (same rules as `GET .../comments`): if the resolved comment is not in the visible set for the current viewer, the response is `404` (same JSON shape as a missing comment).
+- **Response**:
+  - **`200 OK`**: Single `comment` object.
+  - **`400 Bad Request`**: Entry is deleted / not visible (`is_visible` is false).
+  - **`404 Not Found`**: No comment on this entry matches `COMMENT_REF`, **or** the comment exists but is **not visible** to the current viewer (including anonymous on `FRIENDS` threads).
 
 ### DELETE /api/authors/{AUTHOR_SERIAL}/entries/{ENTRY_SERIAL}/comments/{COMMENT_REF}
 
-- **When to use**: Delete a comment authored by the authenticated/requested author.
-- **Auth**: Author must be identified via session or request body (`authorId`), and must match the comment author.
-- **Response**: `204 No Content` on success, `403` for non-author, `404` if comment is not visible/found.
-- **Federation behavior**: successful local deletions are fanned out as `type: "comment_delete"` inbox payloads to keep remote copies consistent.
+- **When to use**: Delete a comment. Only the **comment author** may delete.
+- **Auth**: The actor must be resolved via session or JSON body (`authorId`, nested `author`, etc., same as POST comments) and must equal `comment.author`.
+- **Behaviour**: The server resolves the comment by **entry + ref** first (UUID or FQID), **without** applying the comment-list visibility filter. That way the author can delete their own comment even when they would no longer see it in `GET .../comments` (for example after unfollowing on a `FRIENDS` entry). Ownership is enforced after lookup.
+- **Response**:
+  - **`204 No Content`**: Comment deleted.
+  - **`400 Bad Request`**: Entry deleted, JSON body invalid, or author cannot be resolved.
+  - **`403 Forbidden`**: Resolved author is not the comment author.
+  - **`404 Not Found`**: No comment on this entry matches `COMMENT_REF`.
+- **Federation behavior**: Successful local deletions are fanned out as `type: "comment_delete"` inbox payloads to keep remote copies consistent.
 
 ---
 
@@ -980,12 +1029,13 @@ Likes are per (author, entry); at most one like per author per entry.
 ### GET /api/authors/{AUTHOR_SERIAL}/entries/{ENTRY_SERIAL}/likes
 
 - **When to use**: List who liked an entry. Use when displaying like count or list on the entry detail/stream.
-- **Auth**: None required for entries the caller can access.
+- **Auth**: None required.
+- **Access control (current implementation)**: The handler only requires that the entry exists and is not deleted (`entry.is_visible`). It lists likes for that entry **without** applying the same **entry visibility** rules as `GET .../entries/{ENTRY_SERIAL}` (e.g. `FRIENDS` / follower checks). Callers should not rely on this endpoint to hide likes for entries they cannot view on the entry-detail API.
 - **Query params**: `page` (optional, default `1`), `size` (optional, default `10`).
 
 #### Response
 
-- **Status**: `200 OK`.
+- **Status**: `200 OK` with the likes envelope, or **`400 Bad Request`** if the entry is deleted.
 - **Body**: A `likes` object with `type`, `id`, `web`, `page_number`, `size`, `count`, and `src` (array of like objects). Each like has `type`, `author`, `published`, `id`, and `object` (the entry FQID).
 
 #### Example response
@@ -1018,7 +1068,43 @@ Likes are per (author, entry); at most one like per author per entry.
 
 #### Response
 
-- **Status**: `201 Created` when a new like is created, or `200 OK` when the like already existed. Body is the like object. `400 Bad Request` if author cannot be resolved.
+- **Status**: `201 Created` when a new like is created, or `200 OK` when the like already existed. Body is the like object.
+- **`400 Bad Request`**: Entry deleted, invalid JSON, or like author cannot be resolved.
+
+#### Example request
+
+Session-authenticated callers may send an empty JSON object (`{}`). Otherwise pass `authorId` or the same alternate author fields as for comment POST:
+
+```http
+POST /api/authors/8d35d13e-f0ee-468d-bd6f-f942ec660f43/entries/d25343a5-c5cf-4734-b8cf-11211f7af26f/likes
+Content-Type: application/json
+
+{
+  "authorId": "11111111-1111-1111-1111-111111111111"
+}
+```
+
+#### Example response (`201 Created`)
+
+```json
+{
+  "type": "like",
+  "author": {
+    "type": "author",
+    "id": "http://127.0.0.1:8000/api/authors/11111111-1111-1111-1111-111111111111",
+    "host": "http://127.0.0.1:8000/api/",
+    "displayName": "Liker",
+    "web": "http://127.0.0.1:8000/authors/11111111-1111-1111-1111-111111111111",
+    "github": "",
+    "profileImage": ""
+  },
+  "published": "2026-03-16T12:00:00+00:00",
+  "id": "http://127.0.0.1:8000/api/authors/11111111-1111-1111-1111-111111111111/liked/b2c3d4e5-f6a7-8901-bcde-f12345678901",
+  "object": "http://127.0.0.1:8000/api/authors/8d35d13e-f0ee-468d-bd6f-f942ec660f43/entries/d25343a5-c5cf-4734-b8cf-11211f7af26f"
+}
+```
+
+If the like already exists, the server returns **`200 OK`** with the same like object shape (idempotent).
 
 ### DELETE /api/authors/{AUTHOR_SERIAL}/entries/{ENTRY_SERIAL}/likes
 
@@ -1028,7 +1114,7 @@ Likes are per (author, entry); at most one like per author per entry.
 
 #### Response
 
-- **Status**: `204 No Content` on success. `400 Bad Request` if author cannot be resolved. If there was no like, `204` is still returned.
+- **Status**: `204 No Content` on success (also when there was no like to remove). **`400 Bad Request`** if the entry is deleted or the like author cannot be resolved.
 
 ---
 
@@ -1039,12 +1125,13 @@ Comment likes are per (author, comment); at most one like per author per comment
 ### GET /api/authors/{AUTHOR_SERIAL}/entries/{ENTRY_SERIAL}/comments/{COMMENT_SERIAL}/likes
 
 - **When to use**: List who liked a comment.
-- **Auth**: None required for comments the caller can access.
+- **Auth**: None required.
+- **Access control**: The comment must be in the **visible comments** set for this entry and viewer (same rules as `GET .../comments`). If the comment is not visible, lookup returns **`404 Not Found`**.
 - **Query params**: `page` (optional, default `1`), `size` (optional, default `10`).
 
 #### Response
 
-- **Status**: `200 OK`.
+- **Status**: `200 OK`, or **`400 Bad Request`** if the entry is deleted, or **`404 Not Found`** if the comment does not exist on this entry or is not visible to the viewer.
 - **Body**: A `likes` object with `type`, `id`, `page_number`, `size`, `count`, and `src` (array of like objects). Each like has `type`, `author`, `published`, `id`, and `object` (the comment FQID).
 
 ### POST /api/authors/{AUTHOR_SERIAL}/entries/{ENTRY_SERIAL}/comments/{COMMENT_SERIAL}/likes

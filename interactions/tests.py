@@ -300,6 +300,21 @@ class FriendsEntryCommentVisibilityApiTests(TestCase):
         hidden_response = self.client.get(self._comment_detail_url(self.owner_comment))
         self.assertEqual(hidden_response.status_code, 404)
 
+    def test_non_friend_commenter_can_delete_own_comment_without_session(self):
+        """DELETE must resolve the comment without session-based visibility (payload actor)."""
+        from unittest.mock import patch
+
+        url = self._comment_detail_url(self.stranger_comment)
+        with patch("interactions.views.distribute_comment_delete_to_remote") as mock_distribute:
+            response = self.client.delete(
+                url,
+                data=json.dumps({"authorId": str(self.stranger_commenter.uuid)}),
+                content_type="application/json",
+            )
+        self.assertEqual(response.status_code, 204)
+        mock_distribute.assert_called_once()
+        self.assertFalse(Comment.objects.filter(pk=self.stranger_comment.pk).exists())
+
     def test_non_friend_commenter_cannot_access_hidden_comment_likes_endpoint(self):
         self.client.force_login(self.stranger_commenter_user)
 
