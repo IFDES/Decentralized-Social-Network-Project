@@ -15,13 +15,10 @@ from authors.models import Author, AuthorAccount
 from config.core.permissions import user_matches_author_uuid
 from config.core.serializers import author_to_json
 from .models import FollowRelationship
-
-import base64
-from urllib.parse import urlparse
-from urllib.request import Request, urlopen
-from urllib.error import HTTPError, URLError
-
-from config.core.models import RemoteNode
+from .distribution import (
+    distribute_follow_request,
+    distribute_follow_state_update,
+)
 
 # _function means internal helper not public endpoint
 def _get_current_author(request: HttpRequest):
@@ -147,101 +144,6 @@ def follow_to_json(rel: FollowRelationship) -> dict:
         "object": author_to_json(rel.followee),
     }
 
-def _node_base_url_from_author_fqid(author_fqid: str) -> str:
-    """
-    Extract the scheme + host portion from an author's FQID.
-    Example:
-      https://node2.example.com/api/authors/abc
-    -> https://node2.example.com
-    """
-    parsed = urlparse(author_fqid)
-    return f"{parsed.scheme}://{parsed.netloc}".rstrip("/")
-
-
-def _remote_inbox_url_for_author(author: Author) -> str:
-    """
-    Build the inbox URL for a remote author from their author FQID.
-    Example:
-      https://node2.example.com/api/authors/abc
-    -> https://node2.example.com/api/authors/abc/inbox
-    """
-    if not author.fqid:
-        raise ValueError("Remote author is missing fqid.")
-    return f"{author.fqid.rstrip('/')}/inbox"
-
-
-def _get_remote_node_for_author(author: Author) -> RemoteNode:
-    """
-    Find the RemoteNode config that matches the remote author's host.
-    """
-    if not author.fqid:
-        raise ValueError("Remote author is missing fqid.")
-
-    base_url = _node_base_url_from_author_fqid(author.fqid)
-
-    try:
-        return RemoteNode.objects.get(base_url=base_url, is_active=True)
-    except RemoteNode.DoesNotExist:
-        raise ValueError(
-            f"No active RemoteNode configuration found for {base_url}. "
-            f"Ask the node admin to add/configure this remote node first."
-        )
-
-
-def _post_json_basic_auth(url: str, payload: dict, username: str, password: str, timeout: int = 10):
-    """
-    Send JSON with HTTP Basic Auth using Python stdlib only.
-    Returns (status_code, response_body_text).
-    """
-    body = json.dumps(payload).encode("utf-8")
-    creds = f"{username}:{password}".encode("utf-8")
-    auth_header = base64.b64encode(creds).decode("ascii")
-
-    request = Request(
-        url=url,
-        data=body,
-        method="POST",
-        headers={
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-            "Authorization": f"Basic {auth_header}",
-        },
-    )
-
-    try:
-        with urlopen(request, timeout=timeout) as response:
-            raw = response.read().decode("utf-8", errors="replace")
-            return response.status, raw
-    except HTTPError as exc:
-        raw = exc.read().decode("utf-8", errors="replace")
-        return exc.code, raw
-    except URLError as exc:
-        raise ConnectionError(f"Could not connect to remote inbox: {exc}") from exc
-
-
-def _send_follow_to_remote_inbox(rel: FollowRelationship):
-    """
-    Push a follow object to the remote author's inbox.
-    """
-    followee = rel.followee
-    remote_node = _get_remote_node_for_author(followee)
-    inbox_url = _remote_inbox_url_for_author(followee)
-
-    payload = follow_to_json(rel)
-
-    status_code, response_body = _post_json_basic_auth(
-        url=inbox_url,
-        payload=payload,
-        username=remote_node.outgoing_username,
-        password=remote_node.outgoing_password,
-    )
-
-    if status_code < 200 or status_code >= 300:
-        raise ConnectionError(
-            f"Remote inbox rejected the follow request "
-            f"(status {status_code}). Response: {response_body}"
-        )
-
 @login_required
 @require_http_methods(["POST"])
 def follow_local_author_ui(request: HttpRequest, target_uuid) -> HttpResponse:
@@ -305,6 +207,13 @@ def approve_request_ui(request: HttpRequest, rel_id: int) -> HttpResponse:
     )
     rel.status = FollowRelationship.Status.APPROVED
     rel.save(update_fields=["status", "updated_at"])
+
+    if not getattr(rel.follower, "is_local", True):
+        try:
+            distribute_follow_state_update(rel, follow_to_json(rel))
+        except Exception as exc:
+            return HttpResponseBadRequest(f"Approved locally, but failed to notify remote node: {exc}")
+
     return redirect("follows:follow-ui")
 
 
@@ -416,7 +325,7 @@ def following_detail(request: HttpRequest, author_serial, foreign_author_fqid):
 
         if not getattr(followee, "is_local", True) and resend_remote:
             try:
-                _send_follow_to_remote_inbox(rel)
+                distribute_follow_request(rel, follow_to_json(rel))
             except ValueError as exc:
                 # Misconfiguration on our side (missing RemoteNode entry, bad fqid, etc.)
                 FollowRelationship.objects.filter(pk=rel.pk).delete()
@@ -509,7 +418,20 @@ def followers_detail(request: HttpRequest, author_serial, foreign_author_fqid):
         rel.status = FollowRelationship.Status.APPROVED
         rel.save(update_fields=["status", "updated_at"])
 
-        # Return follow object so the client sees state=accepted.
+        if not getattr(follower, "is_local", True):
+            try:
+                distribute_follow_state_update(rel, follow_to_json(rel))
+            except (ValueError, ConnectionError) as exc:
+                return JsonResponse(
+                    {
+                        "detail": (
+                            "Follower approved locally, but failed to notify remote node. "
+                            f"{exc}"
+                        )
+                    },
+                    status=502,
+                )
+
         return JsonResponse(follow_to_json(rel), status=200)
 
     # DELETE: reject pending requests, or remove an approved follower (optional).

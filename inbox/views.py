@@ -10,53 +10,15 @@ from entries.models import Entry
 from entries.visibility import can_view_entry, get_visible_comments_queryset
 from follows.models import FollowRelationship
 from interactions.models import Comment, CommentLike, EntryLike
+from entries.remote_ingest import handle_remote_entry_payload, upsert_remote_author
 
 logger = logging.getLogger(__name__)
-
-
-def _upsert_remote_author(author_data: dict) -> Author:
-    """
-    Create or update a remote Author row from an author object in a follow payload.
-    Returns the local DB Author instance representing that remote author.
-    """
-    fqid = author_data.get("id")
-    if not fqid:
-        raise ValueError("Remote author object is missing 'id'.")
-
-    defaults = {
-        "host": author_data.get("host", ""),
-        "web": author_data.get("web", ""),
-        "display_name": author_data.get("displayName", ""),
-        "github": author_data.get("github", ""),
-        "profile_image": author_data.get("profileImage", ""),
-        "description": author_data.get("description", ""),
-        "is_local": False,
-        "is_deleted": False,
-    }
-
-    author, created = Author.objects.get_or_create(
-        fqid=fqid,
-        defaults=defaults,
-    )
-
-    if not created:
-        changed = False
-        for field, value in defaults.items():
-            if getattr(author, field) != value and value != "":
-                setattr(author, field, value)
-                changed = True
-        if author.is_local:
-            author.is_local = False
-            changed = True
-        if changed:
-            author.save()
-
-    return author
 
 
 def _handle_follow_payload(local_author: Author, payload: dict):
     actor_data = payload.get("actor")
     object_data = payload.get("object")
+    state = payload.get("state", "requesting")
 
     if not isinstance(actor_data, dict):
         raise ValueError("Follow payload is missing valid 'actor' author object.")
@@ -67,7 +29,7 @@ def _handle_follow_payload(local_author: Author, payload: dict):
     if local_author.fqid and object_id and local_author.fqid != object_id:
         raise ValueError("Inbox payload object does not match target local author.")
 
-    remote_actor = _upsert_remote_author(actor_data)
+    remote_actor = upsert_remote_author(actor_data)
 
     if remote_actor.pk == local_author.pk:
         raise ValueError("Author cannot follow themselves.")
@@ -78,88 +40,25 @@ def _handle_follow_payload(local_author: Author, payload: dict):
         defaults={"status": FollowRelationship.Status.PENDING},
     )
 
-    if not created:
-        # If previously denied, allow the remote node to re-request
-        if rel.status == FollowRelationship.Status.DENIED:
+    if state == "requesting":
+        if not created and rel.status == FollowRelationship.Status.DENIED:
             rel.status = FollowRelationship.Status.PENDING
             rel.save(update_fields=["status", "updated_at"])
 
-    # Remote mutual follows should resolve to friendship on this node the same way
-    # local mutual follow flows resolve to friends.
-    reciprocal = FollowRelationship.objects.filter(
-        follower=local_author,
-        followee=remote_actor,
-    ).first()
-    if reciprocal:
-        changed_fields_rel = []
-        changed_fields_recip = []
+    elif state == "accepted":
         if rel.status != FollowRelationship.Status.APPROVED:
             rel.status = FollowRelationship.Status.APPROVED
-            changed_fields_rel.append("status")
-        if reciprocal.status != FollowRelationship.Status.APPROVED:
-            reciprocal.status = FollowRelationship.Status.APPROVED
-            changed_fields_recip.append("status")
+            rel.save(update_fields=["status", "updated_at"])
 
-        if changed_fields_rel:
-            changed_fields_rel.append("updated_at")
-            rel.save(update_fields=changed_fields_rel)
-        if changed_fields_recip:
-            changed_fields_recip.append("updated_at")
-            reciprocal.save(update_fields=changed_fields_recip)
+    elif state == "rejected":
+        if rel.status != FollowRelationship.Status.DENIED:
+            rel.status = FollowRelationship.Status.DENIED
+            rel.save(update_fields=["status", "updated_at"])
+
+    else:
+        raise ValueError(f"Unsupported follow state: {state}")
 
     return rel
-
-
-def _handle_entry_payload(local_author: Author, payload: dict):
-    """
-    Ingest a remote entry into the local database.
-    The entry is associated with the remote author from the payload
-    (not the local_author who owns the inbox — the local_author is the
-    intended recipient/follower).
-    """
-    author_data = payload.get("author")
-    if not isinstance(author_data, dict):
-        raise ValueError("Entry payload is missing valid 'author' object.")
-
-    remote_author = _upsert_remote_author(author_data)
-
-    entry_fqid = payload.get("id")
-    if not entry_fqid:
-        raise ValueError("Entry payload is missing 'id' (FQID).")
-
-    title = payload.get("title", "")
-    content = payload.get("content", "")
-    content_type = payload.get("contentType", Entry.CONTENT_TEXT_PLAIN)
-    visibility = payload.get("visibility", Entry.VISIBILITY_PUBLIC)
-    web = payload.get("web", "")
-
-    if not content:
-        raise ValueError("Entry payload is missing 'content'.")
-
-    # Use fqid for deduplication — if we already have this entry, update it
-    try:
-        entry = Entry.objects.get(fqid=entry_fqid)
-        entry.title = title
-        entry.content = content
-        entry.content_type = content_type
-        entry.visibility = visibility
-        if web:
-            entry.web = web
-        entry.save()
-        created = False
-    except Entry.DoesNotExist:
-        entry = Entry.objects.create(
-            author=remote_author,
-            title=title,
-            content=content,
-            content_type=content_type,
-            visibility=visibility,
-            fqid=entry_fqid,
-            web=web,
-        )
-        created = True
-
-    return entry, created
 
 
 def _handle_like_payload(local_author: Author, payload: dict):
@@ -172,7 +71,7 @@ def _handle_like_payload(local_author: Author, payload: dict):
     if not isinstance(author_data, dict):
         raise ValueError("Like payload is missing valid 'author' object.")
 
-    remote_author = _upsert_remote_author(author_data)
+    remote_author = upsert_remote_author(author_data)
 
     object_fqid = payload.get("object")
     if not object_fqid:
@@ -209,7 +108,7 @@ def _handle_like_delete_payload(local_author: Author, payload: dict):
     if not isinstance(author_data, dict):
         raise ValueError("Like-delete payload is missing valid 'author' object.")
 
-    remote_author = _upsert_remote_author(author_data)
+    remote_author = upsert_remote_author(author_data)
     object_fqid = payload.get("object")
     if not object_fqid:
         raise ValueError("Like-delete payload is missing 'object' (target FQID).")
@@ -232,7 +131,7 @@ def _handle_comment_payload(local_author: Author, payload: dict):
     if not isinstance(author_data, dict):
         raise ValueError("Comment payload is missing valid 'author' object.")
 
-    remote_author = _upsert_remote_author(author_data)
+    remote_author = upsert_remote_author(author_data)
     entry_fqid = payload.get("entry")
     if not isinstance(entry_fqid, str) or not entry_fqid:
         raise ValueError("Comment payload is missing 'entry' (entry FQID).")
@@ -368,7 +267,7 @@ def author_inbox(request, author_serial):
 
     if payload_type == "entry":
         try:
-            entry, created = _handle_entry_payload(local_author, payload)
+            entry, created = handle_remote_entry_payload(payload)
         except ValueError as exc:
             return JsonResponse(
                 {"type": "error", "detail": str(exc)},

@@ -44,6 +44,60 @@ from .visibility import (
     get_visible_comments_queryset,
     is_node_admin,
 )
+from .remote_ingest import handle_remote_entry_payload
+
+import base64
+from urllib.request import Request, urlopen
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlparse
+
+from config.core.models import RemoteNode
+
+
+def _node_base_url_from_author_fqid(author_fqid: str) -> str:
+    parsed = urlparse(author_fqid)
+    return f"{parsed.scheme}://{parsed.netloc}".rstrip("/")
+
+
+def _get_remote_node_for_author(author: Author) -> RemoteNode:
+    if not author.fqid:
+        raise ValueError("Remote author is missing fqid.")
+    base_url = _node_base_url_from_author_fqid(author.fqid)
+    return RemoteNode.objects.get(base_url=base_url, is_active=True)
+
+
+def _remote_entries_url_for_author(author: Author) -> str:
+    if not author.fqid:
+        raise ValueError("Remote author is missing fqid.")
+    return f"{author.fqid.rstrip('/')}/entries"
+
+
+def _get_json_basic_auth(url: str, username: str, password: str, timeout: int = 10):
+    creds = f"{username}:{password}".encode("utf-8")
+    auth_header = base64.b64encode(creds).decode("ascii")
+
+    request = Request(
+        url=url,
+        method="GET",
+        headers={
+            "Accept": "application/json",
+            "Authorization": f"Basic {auth_header}",
+        },
+    )
+
+    try:
+        with urlopen(request, timeout=timeout) as response:
+            raw = response.read().decode("utf-8", errors="replace")
+            return response.status, json.loads(raw)
+    except HTTPError as exc:
+        raw = exc.read().decode("utf-8", errors="replace")
+        try:
+            parsed = json.loads(raw) if raw else {}
+        except json.JSONDecodeError:
+            parsed = {"raw": raw}
+        return exc.code, parsed
+    except URLError as exc:
+        raise ConnectionError(f"Could not connect to remote entries endpoint: {exc}") from exc
 
 # This file is assisted by CoPilot on 14 March 2026 22:10 with the prompt
 # "Help me fix these errors "ERROR MESSAGES" in the views.py file for image hosting in entries in Django"
@@ -71,8 +125,9 @@ def _build_image_urls_from_request(
                     visibility=visibility,
                     entry=entry,
                 )
-            except Exception:
-                pass
+            except Exception as exc:
+                print(f"Failed ingesting remote entry: {exc}")
+                continue
 
     text = (request.POST.get("image_urls_text") or "").strip()
     for part in text.replace(",", "\n").splitlines():
@@ -82,6 +137,68 @@ def _build_image_urls_from_request(
             # them directly in markdown content.
             continue
 
+def _should_ingest_remote_entry_for_viewer(entry_payload: dict, remote_author: Author, viewer: Author | None) -> bool:
+    visibility = (entry_payload.get("visibility") or Entry.VISIBILITY_PUBLIC).upper()
+
+    if visibility == Entry.VISIBILITY_DELETED:
+        return False
+
+    if viewer is None:
+        return visibility == Entry.VISIBILITY_PUBLIC
+
+    if visibility == Entry.VISIBILITY_PUBLIC:
+        return True
+
+    if visibility == Entry.VISIBILITY_UNLISTED:
+        return FollowRelationship.objects.filter(
+            follower=viewer,
+            followee=remote_author,
+            status=FollowRelationship.Status.APPROVED,
+        ).exists()
+
+    if visibility == Entry.VISIBILITY_FRIENDS:
+        return FollowRelationship.are_friends(viewer, remote_author)
+
+    return False
+
+def _sync_remote_entries_for_stream(viewer: Author | None):
+    remote_authors = Author.objects.filter(is_local=False, is_deleted=False)
+
+    for remote_author in remote_authors:
+        try:
+            remote_node = _get_remote_node_for_author(remote_author)
+            url = _remote_entries_url_for_author(remote_author)
+
+            status_code, data = _get_json_basic_auth(
+                url=url,
+                username=remote_node.outgoing_username,
+                password=remote_node.outgoing_password,
+            )
+
+            if status_code < 200 or status_code >= 300:
+                continue
+
+            items = data.get("src") or data.get("items") or []
+            if not isinstance(items, list):
+                continue
+
+            for payload in items:
+                if not isinstance(payload, dict):
+                    continue
+
+                if not _should_ingest_remote_entry_for_viewer(payload, remote_author, viewer):
+                    continue
+
+                # reuse your inbox logic here if moved to shared helper
+                try:
+                    handle_remote_entry_payload(payload)
+                except Exception as exc:
+                    print(f"Failed ingesting remote entry: {exc}")
+                    continue
+
+        except Exception as exc:
+            print(f"Failed ingesting remote entry: {exc}")
+            continue
 
 # This file is assisted by CoPilot on 27 Feb 2026 02:10 with the prompt
 # "Help me create a views.py file for entries in Django"
@@ -215,31 +332,41 @@ def get_profile_entry_visibilities(viewer, author) -> list:
 
 def _stream_entries_queryset(request: HttpRequest | None = None):
     """
-    Canonical stream queryset: public entries for anonymous;
-    for authenticated authors, also include unlisted from followed authors
-    and friends-only from friends.
+    Canonical stream queryset:
+    - anonymous: PUBLIC only
+    - authenticated:
+        PUBLIC from everyone
+        UNLISTED from approved followees
+        FRIENDS from mutual approved follows
+    - never show deleted entries/authors
     """
     base = (
-        Entry.objects.filter(is_deleted=False, deleted_at__isnull=True)
+        Entry.objects.filter(
+            is_deleted=False,
+            deleted_at__isnull=True,
+            author__is_deleted=False,
+        )
         .exclude(visibility=Entry.VISIBILITY_DELETED)
         .select_related("author")
     )
+
     viewer = _get_current_author(request) if request else None
     if not viewer:
-        return base.filter(visibility=Entry.VISIBILITY_PUBLIC).order_by(
-            "-updated_at", "-published", "-uuid"
-        )
-    # Friends: authors with mutual APPROVED follow
+        return base.filter(
+            visibility=Entry.VISIBILITY_PUBLIC
+        ).order_by("-updated_at", "-published", "-uuid")
+
     friend_ids = set(
         FollowRelationship.friends_of(viewer).values_list("uuid", flat=True)
     )
-    # Following: authors this viewer follows (APPROVED)
     following_ids = set(
         FollowRelationship.objects.filter(
-            follower=viewer, status=FollowRelationship.Status.APPROVED
+            follower=viewer,
+            status=FollowRelationship.Status.APPROVED,
+            followee__is_deleted=False,
         ).values_list("followee_id", flat=True)
     )
-    # Show: PUBLIC (all) OR UNLISTED (from followed) OR FRIENDS (from friends)
+
     return base.filter(
         Q(visibility=Entry.VISIBILITY_PUBLIC)
         | (
@@ -262,8 +389,13 @@ def _stream_entries_queryset(request: HttpRequest | None = None):
 @require_http_methods(["GET"])
 def stream_page(request: HttpRequest) -> HttpResponse:
     current_author = _get_current_author(request)
+
+    # Pull remote entries first so they exist locally
+    _sync_remote_entries_for_stream(current_author)
+
     entries = list(_stream_entries_queryset(request))
     entry_ids = [e.uuid for e in entries]
+
     like_counts = dict(
         EntryLike.objects.filter(entry_id__in=entry_ids)
         .values("entry_id")
@@ -276,17 +408,19 @@ def stream_page(request: HttpRequest) -> HttpResponse:
         .annotate(n=Count("uuid"))
         .values_list("entry_id", "n")
     )
+
+    liked_ids = set()
     if current_author:
         liked_ids = set(
             EntryLike.objects.filter(author=current_author, entry_id__in=entry_ids)
             .values_list("entry_id", flat=True)
         )
-    else:
-        liked_ids = set()
+
     for e in entries:
         e.like_count = like_counts.get(e.uuid, 0)
         e.comment_count = comment_counts.get(e.uuid, 0)
         e.current_user_has_liked = e.uuid in liked_ids
+
     authors = list(Author.objects.filter(is_deleted=False).order_by("display_name"))
     return render(
         request,
@@ -853,6 +987,9 @@ def image_upload_api(request: HttpRequest, author_id: UUID) -> HttpResponse:
 
 @require_http_methods(["GET"])
 def stream_api(request: HttpRequest) -> HttpResponse:
+    current_author = _get_current_author(request)
+    _sync_remote_entries_for_stream(current_author)
+
     queryset = _stream_entries_queryset(request)
     page_number, size, count, page_items = _paginate_queryset(request, queryset)
     return JsonResponse(
