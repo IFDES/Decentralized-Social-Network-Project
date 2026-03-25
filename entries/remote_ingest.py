@@ -19,7 +19,7 @@ def upsert_remote_author(author_data: dict) -> Author:
     defaults = {
         "host": author_data.get("host", ""),
         "web": author_data.get("web", ""),
-        "display_name": author_data.get("displayName", ""),
+        "display_name": author_data.get("displayName", "") or author_data.get("display_name", ""),
         "github": author_data.get("github", ""),
         "profile_image": author_data.get("profileImage", ""),
         "description": author_data.get("description", ""),

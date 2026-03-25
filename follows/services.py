@@ -138,20 +138,27 @@ def get_or_fetch_author_by_fqid(author_fqid: str) -> Author:
 
     Behavior:
     - normalize the FQID
-    - return existing local DB row if present
+    - if existing row looks complete, return it
     - otherwise try fetching real remote author JSON and upsert it
-    - if fetch fails, create a minimal remote stub row
+    - if fetch fails, return/create a minimal stub row
     """
     author_fqid = normalize_author_fqid(author_fqid)
+    placeholder_name = display_name_from_fqid(author_fqid)
 
     existing = Author.objects.filter(fqid=author_fqid, is_deleted=False).first()
+
     if existing is not None:
-        return existing
+        looks_like_stub = (
+            not existing.display_name
+            or existing.display_name == placeholder_name
+            or existing.display_name == existing.fqid
+        )
+        if not looks_like_stub:
+            return existing
 
     try:
         author_data = fetch_remote_author_json(author_fqid)
 
-        # Some nodes may omit id or give back /authors/ form; force canonical id.
         if not author_data.get("id"):
             author_data["id"] = author_fqid
         else:
@@ -163,15 +170,18 @@ def get_or_fetch_author_by_fqid(author_fqid: str) -> Author:
         if not author_data.get("host"):
             author_data["host"] = node_base_url_from_author_fqid(author_fqid)
 
+        from entries.remote_ingest import upsert_remote_author
         return upsert_remote_author(author_data)
 
     except Exception:
-        # Fallback: create a minimal cached remote author stub
+        if existing is not None:
+            return existing
+
         return Author.objects.create(
             fqid=author_fqid,
             host=node_base_url_from_author_fqid(author_fqid),
             web=web_url_from_author_fqid(author_fqid),
-            display_name=display_name_from_fqid(author_fqid),
+            display_name=placeholder_name,
             is_local=False,
             is_deleted=False,
         )
