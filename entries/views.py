@@ -714,13 +714,14 @@ def comment_delete_page(
     if not current_author:
         return HttpResponseBadRequest("Unable to determine comment author.")
 
-    visible_comments = get_visible_comments_queryset(
-        entry,
-        current_author,
-        is_admin=_is_node_admin(request),
+    # Resolve by entry + id first; do not gate deletes on comment *visibility* to the
+    # viewer (e.g. after unfollow, friends-only threads may hide the comment from the
+    # author in listings even though they still own it).
+    comment = get_object_or_404(
+        Comment.objects.filter(entry=entry).select_related("author", "entry"),
+        pk=comment_id,
     )
-    comment = get_object_or_404(visible_comments, pk=comment_id)
-    if comment.author_id != current_author.id:
+    if comment.author_id != current_author.pk:
         return HttpResponseForbidden("Only the comment author may delete this comment.")
 
     distribute_comment_delete_to_remote(comment)
