@@ -7,11 +7,11 @@ from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 from .models import FollowRelationship
-from .views import normalize_author_fqid
 from authors.models import Author
-from config.core.models import RemoteNode
-from entries.remote_ingest import upsert_remote_author
 from authors.services import normalize_author_fqid
+from config.core.models import RemoteNode
+from config.core.serializers import author_to_json
+from entries.remote_ingest import upsert_remote_author
 
 
 
@@ -39,7 +39,7 @@ def _get_or_create_author_by_fqid(author_fqid: str) -> Author:
             fqid=author_fqid,
             host=host,
             web=author_fqid.replace("/api/authors/", "/authors/"),
-            display_name=_display_name_from_fqid(author_fqid),
+            display_name=display_name_from_fqid(author_fqid),
             is_local=False,
             is_deleted=False,
         )
@@ -139,13 +139,19 @@ def get_or_fetch_author_by_fqid(author_fqid: str) -> Author:
     Behavior:
     - normalize the FQID
     - if existing row looks complete, return it
+    - if FQID belongs to local node and author is unknown, raise ValueError
     - otherwise try fetching real remote author JSON and upsert it
     - if fetch fails, return/create a minimal stub row
     """
+    from django.conf import settings
+
     author_fqid = normalize_author_fqid(author_fqid)
     placeholder_name = display_name_from_fqid(author_fqid)
 
-    existing = Author.objects.filter(fqid=author_fqid, is_deleted=False).first()
+    existing = Author.objects.filter(fqid=author_fqid).first()
+
+    if existing is not None and existing.is_deleted:
+        raise ValueError("That author has been deleted.")
 
     if existing is not None:
         looks_like_stub = (
@@ -155,6 +161,13 @@ def get_or_fetch_author_by_fqid(author_fqid: str) -> Author:
         )
         if not looks_like_stub:
             return existing
+
+    fqid_host = node_base_url_from_author_fqid(author_fqid)
+    local_host = settings.SERVICE_BASE_URL.rstrip("/")
+    if fqid_host == local_host:
+        if existing is not None:
+            return existing
+        raise ValueError("Author not found on this node.")
 
     try:
         author_data = fetch_remote_author_json(author_fqid)

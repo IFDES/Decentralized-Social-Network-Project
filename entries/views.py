@@ -162,7 +162,21 @@ def _should_ingest_remote_entry_for_viewer(entry_payload: dict, remote_author: A
     return False
 
 def _sync_remote_entries_for_stream(viewer: Author | None):
-    remote_authors = Author.objects.filter(is_local=False, is_deleted=False)
+    if viewer is None:
+        return
+
+    followed_ids = set(
+        FollowRelationship.objects.filter(
+            follower=viewer,
+            status=FollowRelationship.Status.APPROVED,
+            followee__is_local=False,
+            followee__is_deleted=False,
+        ).values_list("followee_id", flat=True)
+    )
+    if not followed_ids:
+        return
+
+    remote_authors = Author.objects.filter(pk__in=followed_ids)
 
     for remote_author in remote_authors:
         try:
@@ -368,7 +382,10 @@ def _stream_entries_queryset(request: HttpRequest | None = None):
     )
 
     return base.filter(
-        Q(visibility=Entry.VISIBILITY_PUBLIC)
+        (
+            Q(visibility=Entry.VISIBILITY_PUBLIC)
+            & (Q(author__is_local=True) | Q(author_id__in=following_ids))
+        )
         | (
             Q(visibility=Entry.VISIBILITY_UNLISTED)
             & Q(author_id__in=following_ids)
@@ -796,6 +813,7 @@ def entry_edit_page(
                 entry=entry,
             )
             entry.save(update_fields=["updated_at"])
+            distribute_entry_to_remote_followers(entry)
             return redirect("entries:entry-detail", author_id=author.uuid, entry_id=entry.uuid)
     else:
         form = EntryForm(instance=entry)
@@ -1149,6 +1167,7 @@ def entry_detail_api(
         entry.content_type = content_type
         entry.visibility = visibility
         entry.save()
+        distribute_entry_to_remote_followers(entry)
         return JsonResponse(_entry_to_json(request, entry))
 
     # DELETE
