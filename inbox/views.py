@@ -103,8 +103,6 @@ def _handle_follow_payload(local_author: Author, payload: dict):
         raise ValueError("Follow payload is missing valid 'object' author object.")
 
     if state == "requesting":
-        # actor = the remote follower wanting to follow local_author
-        # object = local_author (the followee)
         object_id = object_data.get("id")
         if local_author.fqid and object_id and local_author.fqid != object_id:
             raise ValueError("Inbox payload object does not match target local author.")
@@ -113,21 +111,25 @@ def _handle_follow_payload(local_author: Author, payload: dict):
         if remote_actor.pk == local_author.pk:
             raise ValueError("Author cannot follow themselves.")
 
-        rel, created = FollowRelationship.objects.get_or_create(
+        rel = FollowRelationship.objects.filter(
             follower=remote_actor,
             followee=local_author,
-            defaults={"status": FollowRelationship.Status.PENDING},
-        )
-        if not created and rel.status == FollowRelationship.Status.DENIED:
-            rel.status = FollowRelationship.Status.PENDING
-            rel.save(update_fields=["status", "updated_at"])
+        ).first()
 
-        rel, created = FollowRelationship.objects.get_or_create(
-            follower=remote_actor,
-            followee=local_author,
-            defaults={"status": FollowRelationship.Status.PENDING},
-        )
-        if not created and rel.status == FollowRelationship.Status.DENIED:
+        if rel is None:
+            rel = _find_existing_follow_for_remote(
+                local_author, remote_actor, direction="incoming"
+            )
+            if rel is not None:
+                _consolidate_follow_author(rel, remote_actor, direction="incoming")
+
+        if rel is None:
+            rel = FollowRelationship.objects.create(
+                follower=remote_actor,
+                followee=local_author,
+                status=FollowRelationship.Status.PENDING,
+            )
+        elif rel.status == FollowRelationship.Status.DENIED:
             rel.status = FollowRelationship.Status.PENDING
             rel.save(update_fields=["status", "updated_at"])
 
