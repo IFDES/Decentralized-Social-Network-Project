@@ -122,34 +122,14 @@ def _handle_follow_payload(local_author: Author, payload: dict):
             rel.status = FollowRelationship.Status.PENDING
             rel.save(update_fields=["status", "updated_at"])
 
-        reciprocal = FollowRelationship.objects.filter(
-            follower=local_author,
-            followee=remote_actor,
-            status__in=[
-                FollowRelationship.Status.PENDING,
-                FollowRelationship.Status.APPROVED,
-            ],
-        ).first()
-
-        if reciprocal is None:
-            reciprocal = _find_existing_follow_for_remote(
-                local_author, remote_actor, direction="outgoing"
-            )
-            if reciprocal is not None:
-                _consolidate_follow_author(reciprocal, remote_actor, direction="outgoing")
-                if reciprocal.status not in (
-                    FollowRelationship.Status.PENDING,
-                    FollowRelationship.Status.APPROVED,
-                ):
-                    reciprocal = None
-
-        if reciprocal is not None:
-            if rel.status != FollowRelationship.Status.APPROVED:
-                rel.status = FollowRelationship.Status.APPROVED
-                rel.save(update_fields=["status", "updated_at"])
-            if reciprocal.status != FollowRelationship.Status.APPROVED:
-                reciprocal.status = FollowRelationship.Status.APPROVED
-                reciprocal.save(update_fields=["status", "updated_at"])
+        rel, created = FollowRelationship.objects.get_or_create(
+            follower=remote_actor,
+            followee=local_author,
+            defaults={"status": FollowRelationship.Status.PENDING},
+        )
+        if not created and rel.status == FollowRelationship.Status.DENIED:
+            rel.status = FollowRelationship.Status.PENDING
+            rel.save(update_fields=["status", "updated_at"])
 
     elif state in ("accepted", "rejected"):
         object_id = object_data.get("id")
