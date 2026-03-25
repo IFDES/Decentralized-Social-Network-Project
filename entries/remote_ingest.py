@@ -1,8 +1,8 @@
 from datetime import datetime, timezone
 
 from authors.models import Author
-
 from .models import Entry
+from follows.services import normalize_author_fqid
 
 
 def upsert_remote_author(author_data: dict) -> Author:
@@ -11,7 +11,9 @@ def upsert_remote_author(author_data: dict) -> Author:
     Returns the local DB Author instance representing that remote author.
     """
     fqid = author_data.get("id")
-    if not fqid:
+    if fqid:
+        fqid = normalize_author_fqid(fqid)    
+    else:
         raise ValueError("Remote author object is missing 'id'.")
 
     defaults = {

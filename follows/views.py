@@ -20,6 +20,7 @@ from .distribution import (
     distribute_follow_state_update,
 )
 from .services import (
+    normalize_author_fqid,
     _get_author_by_fqid_or_400,
     _get_or_create_author_by_fqid,
     follow_state_update_to_json,
@@ -245,24 +246,47 @@ def follow_remote_author_ui(request: HttpRequest) -> HttpResponse:
 
     raw_fqid = request.POST.get("remote_author_fqid")
     try:
-        followee = _get_or_create_author_by_fqid(raw_fqid)
+        followee = get_or_fetch_author_by_fqid(raw_fqid)
     except ValueError as exc:
         return HttpResponseBadRequest(str(exc))
+    except ConnectionError as exc:
+        return HttpResponseBadRequest(str(exc))
+
+    if me.fqid and normalize_author_fqid(me.fqid) == normalize_author_fqid(followee.fqid):
+        return HttpResponseBadRequest("You cannot follow yourself.")
 
     if getattr(followee, "is_local", True):
         return HttpResponseBadRequest(
             "That author is local to this node. Use the local follow button instead."
         )
 
-    try:
-        rel, should_send = _create_or_rerequest_follow(me, followee)
-        _send_remote_follow_if_needed(rel, should_send)
-    except ValueError as exc:
-        return HttpResponseBadRequest(str(exc))
-    except ConnectionError as exc:
-        if rel.pk:
-            FollowRelationship.objects.filter(pk=rel.pk, status=FollowRelationship.Status.PENDING).delete()
-        return HttpResponseBadRequest(str(exc))
+    rel, created = FollowRelationship.objects.get_or_create(
+        follower=me,
+        followee=followee,
+        defaults={"status": FollowRelationship.Status.PENDING},
+    )
+
+    resend_remote = False
+
+    if not created and rel.status == FollowRelationship.Status.DENIED:
+        rel.status = FollowRelationship.Status.PENDING
+        rel.save(update_fields=["status", "updated_at"])
+        resend_remote = True
+
+    if created:
+        resend_remote = True
+
+    if resend_remote:
+        try:
+            distribute_follow_request(rel, follow_to_json(rel))
+        except ValueError as exc:
+            if created:
+                rel.delete()
+            return HttpResponseBadRequest(str(exc))
+        except ConnectionError as exc:
+            if created:
+                rel.delete()
+            return HttpResponseBadRequest(str(exc))
 
     return redirect("follows:follow-ui")
 
@@ -387,28 +411,20 @@ def following_detail(request: HttpRequest, author_serial, foreign_author_fqid):
     if forbidden:
         return forbidden
 
-    try:
-        followee_fqid = normalize_author_fqid(_decode_fqid(foreign_author_fqid))
-    except ValueError as exc:
-        return JsonResponse({"detail": str(exc)}, status=400)
+    decoded_fqid = _decode_fqid(foreign_author_fqid)
 
     if request.method == "PUT":
         try:
-            followee = _get_or_create_author_by_fqid(followee_fqid)
-            rel, should_send = _create_or_rerequest_follow(me, followee)
-            _send_remote_follow_if_needed(rel, should_send)
+            followee = get_or_fetch_author_by_fqid(decoded_fqid)
         except ValueError as exc:
             return JsonResponse({"detail": str(exc)}, status=400)
         except ConnectionError as exc:
-            FollowRelationship.objects.filter(pk=rel.pk, status=FollowRelationship.Status.PENDING).delete()
             return JsonResponse({"detail": str(exc)}, status=502)
-
-        return JsonResponse(follow_to_json(rel), status=201 if should_send else 200)
-
-    try:
-        followee = _get_author_by_fqid_or_400(followee_fqid)
-    except ValueError as exc:
-        return JsonResponse({"detail": str(exc)}, status=400)
+    else:
+        try:
+            followee = get_author_by_fqid_or_400(decoded_fqid)
+        except ValueError as exc:
+            return JsonResponse({"detail": str(exc)}, status=400)
 
     if request.method == "GET":
         rel = FollowRelationship.objects.filter(
@@ -416,9 +432,43 @@ def following_detail(request: HttpRequest, author_serial, foreign_author_fqid):
             followee=followee,
             status__in=[FollowRelationship.Status.PENDING, FollowRelationship.Status.APPROVED],
         ).first()
+
         if not rel:
             return JsonResponse({"detail": "Not following."}, status=404)
+
         return JsonResponse(author_to_json(followee))
+
+    if request.method == "PUT":
+        if me.pk == followee.pk:
+            return HttpResponseBadRequest("You cannot follow yourself.")
+
+        rel, created = FollowRelationship.objects.get_or_create(
+            follower=me,
+            followee=followee,
+            defaults={"status": FollowRelationship.Status.PENDING},
+        )
+
+        resend_remote = False
+
+        if not created and rel.status == FollowRelationship.Status.DENIED:
+            rel.status = FollowRelationship.Status.PENDING
+            rel.save(update_fields=["status", "updated_at"])
+            resend_remote = True
+
+        if created:
+            resend_remote = True
+
+        if not getattr(followee, "is_local", True) and resend_remote:
+            try:
+                distribute_follow_request(rel, follow_to_json(rel))
+            except ValueError as exc:
+                FollowRelationship.objects.filter(pk=rel.pk).delete()
+                return JsonResponse({"detail": str(exc)}, status=400)
+            except ConnectionError as exc:
+                FollowRelationship.objects.filter(pk=rel.pk).delete()
+                return JsonResponse({"detail": str(exc)}, status=502)
+
+        return JsonResponse(follow_to_json(rel), status=201 if created else 200)
 
     deleted, _ = FollowRelationship.objects.filter(follower=me, followee=followee).delete()
     if deleted == 0:
