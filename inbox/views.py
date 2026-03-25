@@ -1,15 +1,11 @@
 import base64
 import json
 import logging
-<<<<<<< HEAD
+from urllib.parse import urlparse
 import uuid as uuid_mod
 
-from django.core.files.base import ContentFile
-=======
-from urllib.parse import urlparse
-
 from django.db.models import Q
->>>>>>> multinodefix
+from django.core.files.base import ContentFile
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
