@@ -1,6 +1,8 @@
 import json
 import logging
+from urllib.parse import urlparse
 
+from django.db.models import Q
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
@@ -15,6 +17,94 @@ from entries.remote_ingest import handle_remote_entry_payload, upsert_remote_aut
 logger = logging.getLogger(__name__)
 
 
+def _extract_author_uuid_from_fqid(fqid):
+    """Extract the author UUID segment from an FQID like .../api/authors/{uuid}."""
+    if not fqid:
+        return None
+    for marker in ("/api/authors/", "/authors/"):
+        if marker in fqid:
+            rest = fqid.split(marker, 1)[1].strip("/")
+            uuid_part = rest.split("/", 1)[0]
+            return uuid_part if uuid_part else None
+    return None
+
+
+def _find_existing_follow_for_remote(local_author, remote_author, direction="outgoing"):
+    """
+    Find a FollowRelationship that might reference an older Author stub for the
+    same remote person (FQID mismatch after upsert).  Returns the matched
+    FollowRelationship or None.
+    """
+    if not remote_author.fqid:
+        return None
+
+    target_uuid = _extract_author_uuid_from_fqid(remote_author.fqid)
+    target_host = urlparse(remote_author.fqid).netloc
+
+    if direction == "outgoing":
+        qs = (
+            FollowRelationship.objects.filter(
+                follower=local_author, followee__is_local=False,
+            )
+            .exclude(followee=remote_author)
+            .select_related("followee")
+        )
+    else:
+        qs = (
+            FollowRelationship.objects.filter(
+                followee=local_author, follower__is_local=False,
+            )
+            .exclude(follower=remote_author)
+            .select_related("follower")
+        )
+
+    candidates = list(qs)
+    if not candidates:
+        return None
+
+    if target_uuid:
+        for cand in candidates:
+            other = cand.followee if direction == "outgoing" else cand.follower
+            cand_uuid = _extract_author_uuid_from_fqid(other.fqid or "")
+            if cand_uuid and cand_uuid == target_uuid:
+                return cand
+
+    pending = [c for c in candidates if c.status == FollowRelationship.Status.PENDING]
+    if len(pending) == 1:
+        return pending[0]
+
+    if target_host:
+        for cand in pending:
+            other = cand.followee if direction == "outgoing" else cand.follower
+            cand_host = urlparse(other.fqid or "").netloc
+            if cand_host == target_host:
+                return cand
+
+    return None
+
+
+def _consolidate_follow_author(rel, remote_author, direction="outgoing"):
+    """
+    Update rel to reference the canonical remote_author and clean up the old
+    Author stub (transferring its entries to the canonical Author first).
+    """
+    field = "followee" if direction == "outgoing" else "follower"
+    old_author = getattr(rel, field)
+    if old_author.pk == remote_author.pk:
+        return
+
+    setattr(rel, f"{field}_id", remote_author.pk)
+    rel.save(update_fields=[f"{field}_id", "updated_at"])
+
+    Entry.objects.filter(author=old_author).update(author=remote_author)
+
+    still_used = FollowRelationship.objects.filter(
+        Q(follower=old_author) | Q(followee=old_author)
+    ).exists()
+    if not still_used:
+        old_author.delete()
+
+
 def _handle_follow_payload(local_author: Author, payload: dict):
     actor_data = payload.get("actor")
     object_data = payload.get("object")
@@ -25,35 +115,110 @@ def _handle_follow_payload(local_author: Author, payload: dict):
     if not isinstance(object_data, dict):
         raise ValueError("Follow payload is missing valid 'object' author object.")
 
-    object_id = object_data.get("id")
-    if local_author.fqid and object_id and local_author.fqid != object_id:
-        raise ValueError("Inbox payload object does not match target local author.")
-
-    remote_actor = upsert_remote_author(actor_data)
-
-    if remote_actor.pk == local_author.pk:
-        raise ValueError("Author cannot follow themselves.")
-
-    rel, created = FollowRelationship.objects.get_or_create(
-        follower=remote_actor,
-        followee=local_author,
-        defaults={"status": FollowRelationship.Status.PENDING},
-    )
-
     if state == "requesting":
+        # actor = the remote follower wanting to follow local_author
+        # object = local_author (the followee)
+        object_id = object_data.get("id")
+        if local_author.fqid and object_id and local_author.fqid != object_id:
+            raise ValueError("Inbox payload object does not match target local author.")
+
+        remote_actor = upsert_remote_author(actor_data)
+        if remote_actor.pk == local_author.pk:
+            raise ValueError("Author cannot follow themselves.")
+
+        rel, created = FollowRelationship.objects.get_or_create(
+            follower=remote_actor,
+            followee=local_author,
+            defaults={"status": FollowRelationship.Status.PENDING},
+        )
         if not created and rel.status == FollowRelationship.Status.DENIED:
             rel.status = FollowRelationship.Status.PENDING
             rel.save(update_fields=["status", "updated_at"])
 
-    elif state == "accepted":
-        if rel.status != FollowRelationship.Status.APPROVED:
-            rel.status = FollowRelationship.Status.APPROVED
-            rel.save(update_fields=["status", "updated_at"])
+        reciprocal = FollowRelationship.objects.filter(
+            follower=local_author,
+            followee=remote_actor,
+            status__in=[
+                FollowRelationship.Status.PENDING,
+                FollowRelationship.Status.APPROVED,
+            ],
+        ).first()
 
-    elif state == "rejected":
-        if rel.status != FollowRelationship.Status.DENIED:
-            rel.status = FollowRelationship.Status.DENIED
-            rel.save(update_fields=["status", "updated_at"])
+        if reciprocal is None:
+            reciprocal = _find_existing_follow_for_remote(
+                local_author, remote_actor, direction="outgoing"
+            )
+            if reciprocal is not None:
+                _consolidate_follow_author(reciprocal, remote_actor, direction="outgoing")
+                if reciprocal.status not in (
+                    FollowRelationship.Status.PENDING,
+                    FollowRelationship.Status.APPROVED,
+                ):
+                    reciprocal = None
+
+        if reciprocal is not None:
+            if rel.status != FollowRelationship.Status.APPROVED:
+                rel.status = FollowRelationship.Status.APPROVED
+                rel.save(update_fields=["status", "updated_at"])
+            if reciprocal.status != FollowRelationship.Status.APPROVED:
+                reciprocal.status = FollowRelationship.Status.APPROVED
+                reciprocal.save(update_fields=["status", "updated_at"])
+
+    elif state in ("accepted", "rejected"):
+        object_id = object_data.get("id")
+
+        if local_author.fqid and object_id and local_author.fqid != object_id:
+            raise ValueError("Inbox payload object does not match target local author.")
+
+        remote_followee = upsert_remote_author(actor_data)
+        if remote_followee.pk == local_author.pk:
+            raise ValueError("Author cannot follow themselves.")
+
+        new_status = (
+            FollowRelationship.Status.APPROVED
+            if state == "accepted"
+            else FollowRelationship.Status.DENIED
+        )
+
+        rel = FollowRelationship.objects.filter(
+            follower=local_author,
+            followee=remote_followee,
+        ).first()
+
+        if rel is None:
+            rel = _find_existing_follow_for_remote(
+                local_author, remote_followee, direction="outgoing"
+            )
+            if rel is not None:
+                _consolidate_follow_author(rel, remote_followee, direction="outgoing")
+
+        if rel is None:
+            rel = FollowRelationship.objects.create(
+                follower=local_author,
+                followee=remote_followee,
+                status=new_status,
+            )
+        else:
+            if rel.status != new_status:
+                rel.status = new_status
+                rel.save(update_fields=["status", "updated_at"])
+
+        FollowRelationship.objects.filter(
+            follower=local_author,
+            followee=remote_followee,
+        ).exclude(pk=rel.pk).delete()
+
+    elif state == "withdrawn":
+        remote_unfollower = upsert_remote_author(actor_data)
+        FollowRelationship.objects.filter(
+            follower=remote_unfollower,
+            followee=local_author,
+        ).delete()
+        rel = FollowRelationship(
+            follower=remote_unfollower,
+            followee=local_author,
+            status=FollowRelationship.Status.DENIED,
+        )
 
     else:
         raise ValueError(f"Unsupported follow state: {state}")

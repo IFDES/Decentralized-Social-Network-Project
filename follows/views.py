@@ -19,6 +19,7 @@ from .models import FollowRelationship
 from .distribution import (
     distribute_follow_request,
     distribute_follow_state_update,
+    distribute_unfollow,
 )
 from .services import (
     _get_author_by_fqid_or_400,
@@ -312,6 +313,16 @@ def unfollow_author_ui(request: HttpRequest) -> HttpResponse:
     except Author.DoesNotExist:
         return HttpResponseBadRequest("Author not found.")
 
+    if not getattr(followee, "is_local", True):
+        payload = {
+            "type": "follow",
+            "state": "withdrawn",
+            "summary": f"{me.display_name} unfollowed {followee.display_name}",
+            "actor": author_to_json(me),
+            "object": author_to_json(followee),
+        }
+        distribute_unfollow(me, followee, payload)
+
     deleted, _ = FollowRelationship.objects.filter(
         follower=me,
         followee=followee,
@@ -418,14 +429,14 @@ def following_detail(request: HttpRequest, author_serial, foreign_author_fqid):
         try:
             followee = get_or_fetch_author_by_fqid(decoded_fqid)
         except ValueError as exc:
-            return JsonResponse({"detail": str(exc)}, status=400)
+            return JsonResponse({"detail": str(exc)}, status=404)
         except ConnectionError as exc:
             return JsonResponse({"detail": str(exc)}, status=502)
     else:
         try:
-            followee = get_author_by_fqid_or_400(decoded_fqid)
+            followee = _get_author_by_fqid_or_400(decoded_fqid)
         except ValueError as exc:
-            return JsonResponse({"detail": str(exc)}, status=400)
+            return JsonResponse({"detail": str(exc)}, status=404)
 
     if request.method == "GET":
         rel = FollowRelationship.objects.filter(
@@ -470,6 +481,16 @@ def following_detail(request: HttpRequest, author_serial, foreign_author_fqid):
                 return JsonResponse({"detail": str(exc)}, status=502)
 
         return JsonResponse(follow_to_json(rel), status=201 if created else 200)
+
+    if not getattr(followee, "is_local", True):
+        payload = {
+            "type": "follow",
+            "state": "withdrawn",
+            "summary": f"{me.display_name} unfollowed {followee.display_name}",
+            "actor": author_to_json(me),
+            "object": author_to_json(followee),
+        }
+        distribute_unfollow(me, followee, payload)
 
     deleted, _ = FollowRelationship.objects.filter(follower=me, followee=followee).delete()
     if deleted == 0:

@@ -135,3 +135,22 @@ def distribute_follow_state_update(rel, payload: dict) -> None:
             f"Remote inbox rejected the follow update "
             f"(status {status_code}). Response: {response_body}"
         )
+
+
+def distribute_unfollow(follower, followee, payload: dict) -> None:
+    """
+    Notify the remote followee's inbox that the follower has unfollowed.
+    Best-effort: silently ignores failures so the local unfollow still succeeds.
+    """
+    try:
+        remote_node = get_remote_node_for_author(followee)
+        inbox_url = remote_inbox_url_for_author(followee)
+
+        post_json_basic_auth(
+            url=inbox_url,
+            payload=payload,
+            username=remote_node.outgoing_username,
+            password=remote_node.outgoing_password,
+        )
+    except Exception:
+        pass
