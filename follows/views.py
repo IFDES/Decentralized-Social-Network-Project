@@ -52,15 +52,6 @@ def _create_or_rerequest_follow(me: Author, followee: Author) -> tuple[FollowRel
 
     return rel, should_send
 
-def _send_remote_follow_if_needed(rel: FollowRelationship, should_send: bool):
-    if not should_send:
-        return
-
-    if getattr(rel.followee, "is_local", True):
-        return
-
-    distribute_follow_request(rel, follow_to_json(rel))
-
 # _function means internal helper not public endpoint
 def _get_current_author(request: HttpRequest):
     user = getattr(request, "user", None)

@@ -32,7 +32,8 @@ def _extract_author_uuid_from_fqid(fqid):
 def _find_existing_follow_for_remote(local_author, remote_author, direction="outgoing"):
     """
     Find a FollowRelationship that might reference an older Author stub for the
-    same remote person (FQID mismatch after upsert).  Returns the matched
+    same remote person (FQID mismatch after upsert).
+      Returns the matched
     FollowRelationship or None.
     """
     if not remote_author.fqid:
@@ -417,6 +418,12 @@ def author_inbox(request, author_serial):
             return JsonResponse(
                 {"type": "error", "detail": str(exc)},
                 status=400,
+            )
+        except Exception as exc:
+            logger.exception("Unexpected error while handling follow payload")
+            return JsonResponse(
+                {"type": "error", "detail": str(exc)},
+                status=500,
             )
 
         return JsonResponse(
