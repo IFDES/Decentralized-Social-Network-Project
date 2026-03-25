@@ -47,7 +47,7 @@ def author_to_json(author) -> dict:
         "description": "Optional bio/description text"
     }
     """
-    fqid = build_author_id(author)
+    fqid = author.fqid or build_author_id(author)
     host = author.host or build_author_host()
     web = author.web or build_author_web(author)
 
