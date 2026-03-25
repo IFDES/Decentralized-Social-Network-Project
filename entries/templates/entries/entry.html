@@ -1,0 +1,140 @@
+{% load markdown_extras %}
+
+<div class="entry-card">
+
+  <!-- Header row: author · date on left, pill + 3-dot menu on right -->
+  <div class="entry-card__header">
+    <div class="entry-card__meta">
+      <a href="{% url 'authors:profile' author.uuid %}">{{ author.display_name }}</a>
+      &nbsp;·&nbsp;{{ entry.published }}
+    </div>
+
+    <div class="entry-card__actions">
+      <span class="pill pill-visibility">{{ entry.visibility }}</span>
+
+      <div class="entry-card__menu">
+        <button class="entry-card__menu-btn" id="menu-btn-{{ entry.uuid }}" aria-haspopup="true" aria-expanded="false" title="More options">&#8942;</button>
+        <div class="entry-card__dropdown" id="menu-drop-{{ entry.uuid }}" role="menu">
+          {% if current_author.uuid == author.uuid %}
+            <a href="{% url 'entries:entry-edit' author.uuid entry.uuid %}" role="menuitem">Edit</a>
+            <a href="{% url 'entries:entry-delete' author.uuid entry.uuid %}" class="dropdown-danger" role="menuitem">Delete</a>
+          {% endif %}
+          <button class="entry-share-btn" data-share-url="{% if shareable_link %}{{ shareable_link }}{% else %}{% url 'entries:entry-detail' author.uuid entry.uuid %}{% endif %}" role="menuitem">Share</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Title -->
+  <h1 class="entry-card__title">
+    <a href="{% url 'entries:entry-detail' author.uuid entry.uuid %}">{{ entry.title|default:"Entry" }}</a>
+  </h1>
+
+  <!-- Content -->
+  <div class="entry-card__content">
+  {% with hosted_images=entry.hosted_images.all %}
+    {% if hosted_images %}
+      {% if entry.content %}
+        {% if entry.content_type == "text/markdown" %}
+          <div class="entry-markdown">{{ entry.content|render_markdown|safe }}</div>
+        {% else %}
+          <pre>{{ entry.content }}</pre>
+        {% endif %}
+      {% endif %}
+      <div class="entry-images">
+        {% for hosted in hosted_images %}
+          <figure class="entry-image">
+            <img src="{% url 'entries:serve-hosted-image' hosted.uuid %}" alt="{{ entry.title|default:'Image' }}" />
+          </figure>
+        {% endfor %}
+      </div>
+    {% elif entry.content_type == "image" or entry.content_type == "image/png" or entry.content_type == "image/jpeg" %}
+      {% comment %}Legacy: single image in content{% endcomment %}
+      {% if entry.content %}
+        <figure class="entry-image">
+          <img src="{{ entry.content }}" alt="{{ entry.title|default:'Image' }}" />
+        </figure>
+      {% endif %}
+    {% else %}
+      {% if entry.content %}
+        {% if entry.content_type == "text/markdown" %}
+          <div class="entry-markdown">{{ entry.content|render_markdown|safe }}</div>
+        {% else %}
+          <pre>{{ entry.content }}</pre>
+        {% endif %}
+      {% endif %}
+    {% endif %}
+  {% endwith %}
+</div>
+
+  <!-- Likes footer -->
+  <div class="entry-card__footer">
+    {% if user.is_active %}
+      {% if current_user_has_liked %}{% url 'entries:entry-unlike' author.uuid entry.uuid as like_action %}{% else %}{% url 'entries:entry-like' author.uuid entry.uuid as like_action %}{% endif %}
+      <form action="{{ like_action }}" method="post" style="display:inline;">
+        {% csrf_token %}
+        <button type="submit" class="like-btn{% if current_user_has_liked %} is-liked{% endif %}" title="{% if current_user_has_liked %}Unlike{% else %}Like{% endif %}">
+          {% include "icons/heart.svg" %}
+          {{ like_count }}
+        </button>
+      </form>
+    {% else %}
+      <span class="like-btn" style="cursor:default;">
+        {% include "icons/heart.svg" %}
+        {{ like_count }}
+      </span>
+    {% endif %}
+  </div>
+
+</div>
+
+<script>
+  (function () {
+    var btn = document.getElementById('menu-btn-{{ entry.uuid }}');
+    var dropdown = document.getElementById('menu-drop-{{ entry.uuid }}');
+
+    if (btn && dropdown) {
+      btn.addEventListener('click', function (e) {
+        e.stopPropagation();
+        var open = dropdown.classList.toggle('is-open');
+        btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+      });
+
+      document.addEventListener('click', function () {
+        dropdown.classList.remove('is-open');
+        btn.setAttribute('aria-expanded', 'false');
+      });
+    }
+
+    var shareBtn = dropdown && dropdown.querySelector('.entry-share-btn');
+    if (shareBtn) {
+      shareBtn.addEventListener('click', function (e) {
+        e.stopPropagation();
+        var relUrl = shareBtn.dataset.shareUrl;
+        var absUrl = relUrl ? new URL(relUrl, window.location.href).href : window.location.href;
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(absUrl).then(function () {
+            shareBtn.textContent = 'Copied!';
+            setTimeout(function () { shareBtn.textContent = 'Share'; }, 2000);
+          });
+        } else {
+          var ta = document.createElement('textarea');
+          ta.value = absUrl;
+          ta.style.position = 'fixed';
+          ta.style.opacity = '0';
+          document.body.appendChild(ta);
+          ta.focus();
+          ta.select();
+          document.execCommand('copy');
+          document.body.removeChild(ta);
+          shareBtn.textContent = 'Copied!';
+          setTimeout(function () { shareBtn.textContent = 'Share'; }, 2000);
+        }
+        if (dropdown) {
+          dropdown.classList.remove('is-open');
+          btn.setAttribute('aria-expanded', 'false');
+        }
+      });
+    }
+  })();
+</script>

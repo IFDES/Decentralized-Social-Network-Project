@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+
+{% block title %}
+  {% if is_create %}Create entry{% else %}Edit entry{% endif %} - {{ author.display_name }}
+{% endblock %}
+
+{% block content %}
+  <h1>
+    {% if is_create %}Create entry{% else %}Edit entry{% endif %}
+    for {{ author.display_name }}
+  </h1>
+
+  <p>Content (text) appears above any images. You can add multiple images by uploading files and/or pasting URLs.</p>
+  <p id="commonmark-image-hint" style="display: none;">To embed images in CommonMark, use <code>![alt text](image-url)</code>. <a href="{% url 'entries:image-upload' author.uuid %}" target="_blank" rel="noopener">Upload an image on this node</a> to get a URL, then paste it into your content.</p>
+  <form method="post" enctype="multipart/form-data">
+    {% csrf_token %}
+    {{ form.as_p }}
+    <p class="images-section">
+      <label><strong>Images (optional)</strong></label><br>
+      Upload from computer: <input type="file" name="image_files" id="id_image_files" accept="image/png,image/jpeg,image/gif,image/webp" multiple />
+      <br>
+      or image URL(s) <span style="color:#666;">(one per line or comma-separated)</span>:<br>
+      <textarea name="image_urls_text" id="id_image_urls_text" rows="3" placeholder="https://example.com/photo1.png&#10;https://example.com/photo2.jpg">{% if existing_image_urls_text %}{{ existing_image_urls_text }}{% endif %}</textarea>
+    </p>
+    <button type="submit">
+      {% if is_create %}Create entry{% else %}Save changes{% endif %}
+    </button>
+  </form>
+
+  <script>
+    (function() {
+      var ct = document.querySelector('[name="content_type"]');
+      var hint = document.getElementById('commonmark-image-hint');
+      if (!ct || !hint) return;
+      function toggle() { hint.style.display = (ct.value === 'text/markdown') ? 'block' : 'none'; }
+      ct.addEventListener('change', toggle);
+      toggle();
+    })();
+  </script>
+{% endblock %}

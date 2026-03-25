@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+
+{% block title %}{Edit {{ author.display_name }}}{% endblock %}
+
+{% block content %}
+<body>
+  <h1>Edit Profile</h1>
+  <form method="post">
+    {% csrf_token %}
+    {{ form.as_p }}
+    <button type="submit">Save</button>
+  </form>
+  <p><a href="{% url 'authors:profile' author.uuid %}">Back to profile</a></p>
+</body>
+{% endblock %}

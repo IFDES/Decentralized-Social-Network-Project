@@ -1,0 +1,168 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block title %}Follows{% endblock %}
+
+{% block content %}
+  <style>
+    .follows-page { font-family: system-ui, Arial, sans-serif; max-width: 1200px; color: #111; }
+    h1 { margin-bottom: 0.2rem; }
+    h2 { margin-top: 0; }
+    ul { padding-left: 1.2rem; }
+    li { margin-bottom: 0.4rem; }
+    .note { color: #555; }
+    .columns {
+      display: flex;
+      gap: 20px;
+      margin-top: 1.5rem;
+      flex-wrap: wrap;
+    }
+
+    .column {
+      flex: 1 1 220px;
+      border: 1px solid #ddd;
+      border-radius: 8px;
+      padding: 10px;
+    }
+    .pill { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 0.85rem; }
+    .pill-pending { background: #f5f5f5; border: 1px solid #999; color: #111; }
+    .pill-approved { background: #eee; border: 1px solid #333; color: #111; }
+    button { padding: 4px 8px; margin-left: 6px; }
+  </style>
+  <div class="follows-page">
+  <h1>Follows</h1>
+
+  {% if not current_author %}
+    <p class="note">
+      You are logged in, but not associated with an Author on this node.
+      Ask an admin to create an Author and link it to your user account.
+    </p>
+  {% else %}
+    <p class="note">
+      You are acting as <strong>{{ current_author.display_name }}</strong>.
+    </p>
+
+    <div class="columns">
+      <div class="column">
+        <h2>Local authors</h2>
+        {% if local_authors %}
+          <ul>
+            {% for a in local_authors %}
+              <li>
+                {{ a.display_name }}
+                {% if a.follow_status == "PENDING" %}
+                  <span class="pill pill-pending">pending</span>
+                  <form action="{% url 'follows:unfollow-local' a.uuid %}" method="post" style="display:inline;">
+                    {% csrf_token %}
+                    <button type="submit">Unfollow</button>
+                  </form>
+                {% elif a.follow_status == "APPROVED" %}
+                  <span class="pill pill-approved">following</span>
+                  <form action="{% url 'follows:unfollow-local' a.uuid %}" method="post" style="display:inline;">
+                    {% csrf_token %}
+                    <button type="submit">Unfollow</button>
+                  </form>
+                {% else %}
+                  <form action="{% url 'follows:follow-local' a.uuid %}" method="post" style="display:inline;">
+                    {% csrf_token %}
+                    <button type="submit">Follow</button>
+                  </form>
+                {% endif %}
+              </li>
+            {% endfor %}
+          </ul>
+        {% else %}
+          <p class="note">No other local authors.</p>
+        {% endif %}
+      </div>
+
+      <div class="column">
+        <h2>Authors you are following</h2>
+        {% if following_pending or following_approved %}
+          <ul>
+            {% for rel in following_pending %}
+              <li>
+                {{ rel.followee.display_name }}
+                <span class="pill pill-pending">pending</span>
+                <form action="{% url 'follows:unfollow-local' rel.followee.uuid %}" method="post" style="display:inline;">
+                  {% csrf_token %}
+                  <button type="submit">Unfollow</button>
+                </form>
+              </li>
+            {% endfor %}
+            {% for rel in following_approved %}
+              <li>
+                {{ rel.followee.display_name }}
+                <span class="pill pill-approved">approved</span>
+                <form action="{% url 'follows:unfollow-local' rel.followee.uuid %}" method="post" style="display:inline;">
+                  {% csrf_token %}
+                  <button type="submit">Unfollow</button>
+                </form>
+              </li>
+            {% endfor %}
+          </ul>
+        {% else %}
+          <p class="note">You are not following anyone yet.</p>
+        {% endif %}
+      </div>
+
+      <div class="column">
+        <h2>Authors who follow you</h2>
+        {% if followers_approved %}
+          <ul>
+            {% for rel in followers_approved %}
+              <li>
+                {{ rel.follower.display_name }}
+                <span class="pill pill-approved">follower</span>
+              </li>
+            {% endfor %}
+          </ul>
+        {% else %}
+          <p class="note">No approved followers yet.</p>
+        {% endif %}
+      </div>
+
+      <div class="column">
+        <h2>Incoming follow requests</h2>
+        {% if incoming_requests %}
+          <ul>
+            {% for rel in incoming_requests %}
+              <li>
+                {{ rel.follower.display_name }}
+                <span class="pill pill-pending">requesting</span>
+                <form action="{% url 'follows:follow-approve' rel.id %}" method="post" style="display:inline;">
+                  {% csrf_token %}
+                  <button type="submit">Approve</button>
+                </form>
+                <form action="{% url 'follows:follow-deny' rel.id %}" method="post" style="display:inline;">
+                  {% csrf_token %}
+                  <button type="submit">Deny</button>
+                </form>
+              </li>
+            {% endfor %}
+          </ul>
+        {% else %}
+          <p class="note">No pending follow requests.</p>
+        {% endif %}
+      </div>
+
+      <div class="column">
+        <h2>Friends</h2>
+        {% if friends %}
+          <ul>
+            {% for a in friends %}
+              <li>
+                {{ a.display_name }}
+                <span class="pill pill-approved">friend</span>
+              </li>
+            {% endfor %}
+          </ul>
+        {% else %}
+          <p class="note">No friends yet. Become friends by both following each other and approving.</p>
+        {% endif %}
+      </div>
+
+    </div>
+  {% endif %}
+  </div>
+{% endblock %}

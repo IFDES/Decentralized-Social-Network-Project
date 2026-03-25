@@ -24,4 +24,5 @@ Regan Ng
 
 The authors claiming copyright, if they wish to be known, can list their names here...
 
-* 
+* <a target="_blank" href="https://icons8.com/icon/86527/home">Home</a> icon by <a target="_blank" href="https://icons8.com">Icons8</a>
+* <a target="_blank" href="https://icons8.com/icon/15263/profile">Profile</a> icon by <a target="_blank" href="https://icons8.com">Icons8</a>

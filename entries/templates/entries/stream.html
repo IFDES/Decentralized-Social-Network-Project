@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+
+{% block title %}Stream{% endblock %}
+
+{% block content %}
+  <h1>Stream</h1>
+
+  {% if entries %}
+    {% for entry in entries %}
+      {% include "entries/entry.html" with author=entry.author like_count=entry.like_count current_user_has_liked=entry.current_user_has_liked %}
+    {% endfor %}
+  {% else %}
+    <p>No stream entries available.</p>
+  {% endif %}
+
+  <div id="image-lightbox" class="image-lightbox" aria-hidden="true">
+    <span class="image-lightbox-close" title="Close">&times;</span>
+    <img src="" alt="" />
+  </div>
+  <script>
+    (function() {
+      var lb = document.getElementById('image-lightbox');
+      var lbImg = lb && lb.querySelector('img');
+      var close = lb && lb.querySelector('.image-lightbox-close');
+      function openLightbox(src) {
+        if (!lb || !lbImg) return;
+        lbImg.src = src;
+        lb.classList.add('is-open');
+        lb.setAttribute('aria-hidden', 'false');
+      }
+      function closeLightbox() {
+        if (!lb) return;
+        lb.classList.remove('is-open');
+        lb.setAttribute('aria-hidden', 'true');
+      }
+      if (lb) {
+        lb.addEventListener('click', function(e) {
+          if (e.target === lb || e.target === close) closeLightbox();
+        });
+        document.addEventListener('keydown', function(e) {
+          if (e.key === 'Escape') closeLightbox();
+        });
+      }
+      document.querySelectorAll('.entry-image img, .entry-images img, .entry-markdown img').forEach(function(img) {
+        img.addEventListener('click', function(e) {
+          e.preventDefault();
+          openLightbox(img.src);
+        });
+      });
+    })();
+  </script>
+{% endblock %}

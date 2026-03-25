@@ -1,0 +1,61 @@
+{% load static %}
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{% block title %}Social Distribution{% endblock %}</title>
+    <link rel="stylesheet" href="{% static 'css/style.css' %}">
+  </head>
+  <body>
+    <div class="layout">
+      <nav class="sidebar">
+        <div class="sidebar__logo">
+          <span class="sidebar__logo-text">SD</span>
+        </div>
+        <ul class="sidebar__nav">
+          <li class="sidebar__item">
+            <a href="{% url 'entries:stream-page' %}" class="sidebar__link">
+              <img src="{% static 'icons/Home.png' %}" alt="Home" class="sidebar__icon">
+              <span>Home</span>
+            </a>
+          </li>
+          <li class="sidebar__item">
+            <a href="{% url 'authors:my_profile' %}" class="sidebar__link">
+              <img src="{% static 'icons/Profile.png' %}" alt="Profile" class="sidebar__icon">
+              <span>Profile</span>
+            </a>
+          </li>
+          <li class="sidebar__item">
+            <a href="{% url 'follows:follow-ui' %}" class="sidebar__link">
+              <img src="{% static 'icons/ProfileFollowReq.png' %}" alt="Following" class="sidebar__icon">
+              <span>Following</span>
+            </a>
+          </li>
+          <li class="sidebar__item">
+            <a href="{% url 'entries:entry-create-me' %}" class="sidebar__link">
+              <img src="{% static 'icons/NewPost.svg' %}" alt="New post" class="sidebar__icon">
+              <span>New post</span>
+            </a>
+          </li>
+        </ul>
+
+        <div class="sidebar__bottom">
+          <form action="{% url 'logout' %}" method="post" class="sidebar__logout-form">
+            {% csrf_token %}
+            <button type="submit" class="sidebar__link sidebar__logout-button">
+              <img src="{% static 'icons/Logout.svg' %}" alt="Logout" class="sidebar__icon">
+              <span>Logout</span>
+            </button>
+          </form>
+        </div>
+      </nav>
+
+      <main class="content">
+        <div class="content-inner">
+          {% block content %}{% endblock %}
+        </div>
+      </main>
+    </div>
+  </body>
+</html>
