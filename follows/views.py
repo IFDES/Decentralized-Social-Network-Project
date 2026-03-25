@@ -24,6 +24,7 @@ from .services import (
     _get_author_by_fqid_or_400,
     _get_or_create_author_by_fqid,
     follow_state_update_to_json,
+    get_or_fetch_author_by_fqid,
 )
 
 def _create_or_rerequest_follow(me: Author, followee: Author) -> tuple[FollowRelationship, bool]:
