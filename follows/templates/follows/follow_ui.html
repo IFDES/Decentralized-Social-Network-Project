@@ -52,14 +52,16 @@
                 {{ a.display_name }}
                 {% if a.follow_status == "PENDING" %}
                   <span class="pill pill-pending">pending</span>
-                  <form action="{% url 'follows:unfollow-local' a.uuid %}" method="post" style="display:inline;">
+                  <form action="{% url 'follows:unfollow-author' %}" method="post" style="display:inline;">
                     {% csrf_token %}
+                    <input type="hidden" name="followee_fqid" value="{{ a.fqid }}">
                     <button type="submit">Unfollow</button>
                   </form>
                 {% elif a.follow_status == "APPROVED" %}
                   <span class="pill pill-approved">following</span>
-                  <form action="{% url 'follows:unfollow-local' a.uuid %}" method="post" style="display:inline;">
+                  <form action="{% url 'follows:unfollow-author' %}" method="post" style="display:inline;">
                     {% csrf_token %}
+                    <input type="hidden" name="followee_fqid" value="{{ a.fqid }}">
                     <button type="submit">Unfollow</button>
                   </form>
                 {% else %}
@@ -77,6 +79,25 @@
       </div>
 
       <div class="column">
+        <h2>Follow remote author</h2>
+        <p class="note">
+          Paste the remote author's FQID, for example:
+          <code>https://remote-node/api/authors/...</code>
+        </p>
+        <form action="{% url 'follows:follow-remote' %}" method="post">
+          {% csrf_token %}
+          <input
+            type="url"
+            name="remote_author_fqid"
+            placeholder="https://remote-node/api/authors/..."
+            required
+            style="width: 100%; margin-bottom: 8px;"
+          >
+          <button type="submit">Send follow request</button>
+        </form>
+      </div>
+
+      <div class="column">
         <h2>Authors you are following</h2>
         {% if following_pending or following_approved %}
           <ul>
@@ -84,8 +105,9 @@
               <li>
                 {{ rel.followee.display_name }}
                 <span class="pill pill-pending">pending</span>
-                <form action="{% url 'follows:unfollow-local' rel.followee.uuid %}" method="post" style="display:inline;">
+                <form action="{% url 'follows:unfollow-author' %}" method="post" style="display:inline;">
                   {% csrf_token %}
+                  <input type="hidden" name="followee_fqid" value="{{ rel.followee.fqid }}">
                   <button type="submit">Unfollow</button>
                 </form>
               </li>
@@ -94,8 +116,9 @@
               <li>
                 {{ rel.followee.display_name }}
                 <span class="pill pill-approved">approved</span>
-                <form action="{% url 'follows:unfollow-local' rel.followee.uuid %}" method="post" style="display:inline;">
+                <form action="{% url 'follows:unfollow-author' %}" method="post" style="display:inline;">
                   {% csrf_token %}
+                  <input type="hidden" name="followee_fqid" value="{{ rel.followee.fqid }}">
                   <button type="submit">Unfollow</button>
                 </form>
               </li>

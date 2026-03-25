@@ -35,11 +35,11 @@ urlpatterns = [
         views.follow_local_author_ui,
         name="follow-local",
     ),
-    path(
-        "follows/unfollow/<uuid:target_uuid>/",
-        views.unfollow_local_author_ui,
-        name="unfollow-local",
-    ),
+    # path(
+    #     "follows/unfollow/<uuid:target_uuid>/",
+    #     views.unfollow_local_author_ui,
+    #     name="unfollow-local",
+    # ),
     path(
         "follows/requests/<int:rel_id>/approve/",
         views.approve_request_ui,
@@ -49,5 +49,15 @@ urlpatterns = [
         "follows/requests/<int:rel_id>/deny/",
         views.deny_request_ui,
         name="follow-deny",
+    ),
+    path(
+        "follows/follow-remote/",
+        views.follow_remote_author_ui,
+        name="follow-remote",
+    ),
+    path(
+        "follows/unfollow/",
+        views.unfollow_author_ui,
+        name="unfollow-author",
     ),
 ]
