@@ -12,6 +12,7 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 from authors.models import Author, AuthorAccount
+from authors.services import normalize_author_fqid
 from config.core.permissions import user_matches_author_uuid
 from config.core.serializers import author_to_json
 from .models import FollowRelationship
@@ -20,7 +21,6 @@ from .distribution import (
     distribute_follow_state_update,
 )
 from .services import (
-    normalize_author_fqid,
     _get_author_by_fqid_or_400,
     _get_or_create_author_by_fqid,
     follow_state_update_to_json,

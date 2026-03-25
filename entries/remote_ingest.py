@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 
 from authors.models import Author
 from .models import Entry
-from follows.services import normalize_author_fqid
+from authors.services import normalize_author_fqid
 
 
 def upsert_remote_author(author_data: dict) -> Author:

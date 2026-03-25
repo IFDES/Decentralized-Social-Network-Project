@@ -7,9 +7,12 @@ from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 from .models import FollowRelationship
+from .views import normalize_author_fqid
 from authors.models import Author
 from config.core.models import RemoteNode
 from entries.remote_ingest import upsert_remote_author
+from authors.services import normalize_author_fqid
+
 
 
 def _host_from_author_fqid(author_fqid: str) -> str:
@@ -57,43 +60,6 @@ def follow_state_update_to_json(rel: FollowRelationship) -> dict:
         "actor": author_to_json(rel.followee),
         "object": author_to_json(rel.follower),
     }
-
-def normalize_author_fqid(author_fqid: str) -> str:
-    """
-    Accept either:
-      - https://node.com/api/authors/<uuid>
-      - https://node.com/authors/<uuid>
-
-    Return canonical API form:
-      - https://node.com/api/authors/<uuid>
-    """
-    author_fqid = (author_fqid or "").strip().rstrip("/")
-    if not author_fqid:
-        raise ValueError("Missing author FQID.")
-
-    parsed = urlparse(author_fqid)
-    if not parsed.scheme or not parsed.netloc:
-        raise ValueError("Invalid author FQID.")
-
-    path = parsed.path.rstrip("/")
-
-    if "/api/authors/" in path:
-        _, tail = path.split("/api/authors/", 1)
-        author_id = tail.strip("/")
-        if not author_id:
-            raise ValueError("Invalid author FQID.")
-        normalized_path = f"/api/authors/{author_id}"
-    elif "/authors/" in path:
-        _, tail = path.split("/authors/", 1)
-        author_id = tail.strip("/")
-        if not author_id:
-            raise ValueError("Invalid author FQID.")
-        normalized_path = f"/api/authors/{author_id}"
-    else:
-        raise ValueError("Author FQID must contain /authors/<id> or /api/authors/<id>.")
-
-    return f"{parsed.scheme}://{parsed.netloc}{normalized_path}"
-
 
 def web_url_from_author_fqid(author_fqid: str) -> str:
     author_fqid = normalize_author_fqid(author_fqid)
