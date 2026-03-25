@@ -13,6 +13,7 @@ from entries.visibility import can_view_entry, get_visible_comments_queryset
 from follows.models import FollowRelationship
 from interactions.models import Comment, CommentLike, EntryLike
 from entries.remote_ingest import handle_remote_entry_payload, upsert_remote_author
+from authors.services import normalize_author_fqid
 
 logger = logging.getLogger(__name__)
 
@@ -30,22 +31,17 @@ def _extract_author_uuid_from_fqid(fqid):
 
 
 def _find_existing_follow_for_remote(local_author, remote_author, direction="outgoing"):
-    """
-    Find a FollowRelationship that might reference an older Author stub for the
-    same remote person (FQID mismatch after upsert).
-      Returns the matched
-    FollowRelationship or None.
-    """
     if not remote_author.fqid:
         return None
 
-    target_uuid = _extract_author_uuid_from_fqid(remote_author.fqid)
-    target_host = urlparse(remote_author.fqid).netloc
+    target_fqid = normalize_author_fqid(remote_author.fqid)
+    target_uuid = _extract_author_uuid_from_fqid(target_fqid)
 
     if direction == "outgoing":
         qs = (
             FollowRelationship.objects.filter(
-                follower=local_author, followee__is_local=False,
+                follower=local_author,
+                followee__is_local=False,
             )
             .exclude(followee=remote_author)
             .select_related("followee")
@@ -53,33 +49,23 @@ def _find_existing_follow_for_remote(local_author, remote_author, direction="out
     else:
         qs = (
             FollowRelationship.objects.filter(
-                followee=local_author, follower__is_local=False,
+                followee=local_author,
+                follower__is_local=False,
             )
             .exclude(follower=remote_author)
             .select_related("follower")
         )
 
-    candidates = list(qs)
-    if not candidates:
-        return None
+    for cand in qs:
+        other = cand.followee if direction == "outgoing" else cand.follower
+        other_fqid = normalize_author_fqid(other.fqid or "")
 
-    if target_uuid:
-        for cand in candidates:
-            other = cand.followee if direction == "outgoing" else cand.follower
-            cand_uuid = _extract_author_uuid_from_fqid(other.fqid or "")
-            if cand_uuid and cand_uuid == target_uuid:
-                return cand
+        if other_fqid and other_fqid == target_fqid:
+            return cand
 
-    pending = [c for c in candidates if c.status == FollowRelationship.Status.PENDING]
-    if len(pending) == 1:
-        return pending[0]
-
-    if target_host:
-        for cand in pending:
-            other = cand.followee if direction == "outgoing" else cand.follower
-            cand_host = urlparse(other.fqid or "").netloc
-            if cand_host == target_host:
-                return cand
+        other_uuid = _extract_author_uuid_from_fqid(other_fqid)
+        if target_uuid and other_uuid and target_uuid == other_uuid:
+            return cand
 
     return None
 

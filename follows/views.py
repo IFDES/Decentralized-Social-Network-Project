@@ -106,6 +106,21 @@ def follow_ui_page(request: HttpRequest) -> HttpResponse:
         ).select_related("followee")
     )
 
+    # import logging
+    # logger = logging.getLogger(__name__)
+
+    # logger.warning("FOLLOW UI for me=%s (%s)", me.display_name, me.fqid)
+    # for rel in outgoing_rels:
+    #     logger.warning(
+    #         "OUTGOING REL id=%s follower=%s followee_id=%s followee_fqid=%s followee_name=%s status=%s",
+    #         rel.id,
+    #         rel.follower.fqid,
+    #         rel.followee_id,
+    #         rel.followee.fqid,
+    #         rel.followee.display_name,
+    #         rel.status,
+    #     )
+
     rel_by_followee_id = {rel.followee_id: rel for rel in outgoing_rels}
 
     for author in local_authors:
