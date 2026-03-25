@@ -200,14 +200,15 @@ def _handle_follow_payload(local_author: Author, payload: dict):
                 status=new_status,
             )
         else:
+            changed = False
+            if rel.followee_id != remote_followee.pk:
+                rel.followee = remote_followee
+                changed = True
             if rel.status != new_status:
                 rel.status = new_status
-                rel.save(update_fields=["status", "updated_at"])
-
-        FollowRelationship.objects.filter(
-            follower=local_author,
-            followee=remote_followee,
-        ).exclude(pk=rel.pk).delete()
+                changed = True
+            if changed:
+                rel.save(update_fields=["followee", "status", "updated_at"])
 
     elif state == "withdrawn":
         remote_unfollower = upsert_remote_author(actor_data)
