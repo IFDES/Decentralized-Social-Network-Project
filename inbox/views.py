@@ -1,14 +1,17 @@
+import base64
 import json
 import logging
+import uuid as uuid_mod
 from urllib.parse import urlparse
 
+from django.core.files.base import ContentFile
 from django.db.models import Q
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 
 from authors.models import Author
-from entries.models import Entry
+from entries.models import Entry, HostedImage
 from entries.visibility import can_view_entry, get_visible_comments_queryset
 from follows.models import FollowRelationship
 from interactions.models import Comment, CommentLike, EntryLike
@@ -194,6 +197,112 @@ def _handle_follow_payload(local_author: Author, payload: dict):
         raise ValueError(f"Unsupported follow state: {state}")
 
     return rel
+
+
+_BASE64_IMAGE_CONTENT_TYPES = {
+    "image/png;base64",
+    "image/jpeg;base64",
+    "image/gif;base64",
+    "image/webp;base64",
+    "application/base64",
+}
+
+_CONTENT_TYPE_TO_EXT = {
+    "image/png;base64": ".png",
+    "image/jpeg;base64": ".jpg",
+    "image/gif;base64": ".gif",
+    "image/webp;base64": ".webp",
+    "application/base64": ".png",  # best-effort fallback
+}
+
+
+def _decode_and_store_image(entry: Entry, remote_author: Author, content: str, content_type: str) -> None:
+    """
+    Decode base64 image content from a remote entry payload and store it
+    as a HostedImage linked to the entry, so the image is available locally.
+    """
+    try:
+        image_data = base64.b64decode(content)
+    except Exception:
+        logger.warning("Failed to decode base64 image content for entry %s", entry.fqid)
+        return
+
+    ext = _CONTENT_TYPE_TO_EXT.get(content_type, ".png")
+    filename = f"remote_{uuid_mod.uuid4().hex}{ext}"
+
+    # Remove any previous hosted images for this entry (re-send / edit case)
+    entry.hosted_images.all().delete()
+
+    HostedImage.objects.create(
+        uploaded_by=remote_author,
+        file=ContentFile(image_data, name=filename),
+        visibility=entry.visibility,
+        entry=entry,
+    )
+
+
+def _handle_entry_payload(local_author: Author, payload: dict):
+    """
+    Ingest a remote entry into the local database.
+    The entry is associated with the remote author from the payload
+    (not the local_author who owns the inbox — the local_author is the
+    intended recipient/follower).
+
+    If the entry carries base64-encoded image content (e.g. contentType
+    "image/png;base64"), the image is decoded and stored as a local
+    HostedImage so it is visible without fetching from the remote node.
+    """
+    author_data = payload.get("author")
+    if not isinstance(author_data, dict):
+        raise ValueError("Entry payload is missing valid 'author' object.")
+
+    remote_author = _upsert_remote_author(author_data)
+
+    entry_fqid = payload.get("id")
+    if not entry_fqid:
+        raise ValueError("Entry payload is missing 'id' (FQID).")
+
+    title = payload.get("title", "")
+    content = payload.get("content", "")
+    content_type = payload.get("contentType", Entry.CONTENT_TEXT_PLAIN)
+    visibility = payload.get("visibility", Entry.VISIBILITY_PUBLIC)
+    web = payload.get("web", "")
+
+    if not content:
+        raise ValueError("Entry payload is missing 'content'.")
+
+    # Detect base64 image payloads — store the image locally and normalize
+    # the entry's content_type to "image" for local rendering.
+    is_base64_image = content_type in _BASE64_IMAGE_CONTENT_TYPES
+    stored_content_type = Entry.CONTENT_IMAGE if is_base64_image else content_type
+
+    # Use fqid for deduplication — if we already have this entry, update it
+    try:
+        entry = Entry.objects.get(fqid=entry_fqid)
+        entry.title = title
+        entry.content = content if not is_base64_image else ""
+        entry.content_type = stored_content_type
+        entry.visibility = visibility
+        if web:
+            entry.web = web
+        entry.save()
+        created = False
+    except Entry.DoesNotExist:
+        entry = Entry.objects.create(
+            author=remote_author,
+            title=title,
+            content=content if not is_base64_image else "",
+            content_type=stored_content_type,
+            visibility=visibility,
+            fqid=entry_fqid,
+            web=web,
+        )
+        created = True
+
+    if is_base64_image:
+        _decode_and_store_image(entry, remote_author, content, content_type)
+
+    return entry, created
 
 
 def _handle_like_payload(local_author: Author, payload: dict):

@@ -202,30 +202,33 @@ def entry_comment_detail_api(
     entry = get_object_or_404(Entry, pk=entry_id, author=entry_author)
     if not entry.is_visible:
         return HttpResponseBadRequest("Entry has been deleted.")
-    visible_comments = get_visible_comments_queryset(
-        entry,
-        get_request_author(request),
-        is_admin=is_node_admin(request),
-    )
 
     # comment_ref may be:
     # - UUID (local)
     # - FQID (percent-encoded URL) matching Comment.fqid
     decoded = unquote(comment_ref)
 
+    base_comments = Comment.objects.filter(entry=entry).select_related("author", "entry")
     comment = None
     try:
-        comment = visible_comments.get(pk=UUID(decoded))
+        comment = base_comments.get(pk=UUID(decoded))
     except (ValueError, Comment.DoesNotExist):
         pass
-
     if comment is None:
         try:
-            comment = visible_comments.get(fqid=decoded)
+            comment = base_comments.get(fqid=decoded)
         except Comment.DoesNotExist:
             return JsonResponse({"detail": "Comment not found."}, status=404)
 
+    visible_comments = get_visible_comments_queryset(
+        entry,
+        get_request_author(request),
+        is_admin=is_node_admin(request),
+    )
+
     if request.method == "GET":
+        if not visible_comments.filter(pk=comment.pk).exists():
+            return JsonResponse({"detail": "Comment not found."}, status=404)
         return JsonResponse(comment_to_json(comment))
 
     try:
