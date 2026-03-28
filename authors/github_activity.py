@@ -47,9 +47,12 @@ def _event_to_summary(event: dict) -> str:
 
     if etype == "PushEvent":
         commits = payload.get("commits", [])
-        count = len(commits)
+        count = payload.get("size", len(commits))  # "size" is the real total; commits[] may be truncated
         messages = "; ".join(c.get("message", "").split("\n")[0] for c in commits[:3])
-        return f"Pushed {count} commit(s) to {repo_name}: {messages}"
+        summary = f"Pushed {count} commit(s) to {repo_name}"
+        if messages:
+            summary += f": {messages}"
+        return summary
 
     if etype == "CreateEvent":
         ref_type = payload.get("ref_type", "repository")

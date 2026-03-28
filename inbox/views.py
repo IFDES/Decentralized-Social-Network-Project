@@ -4,6 +4,7 @@ import logging
 import uuid as uuid_mod
 from urllib.parse import urlparse
 
+from django.db.models import Q
 from django.core.files.base import ContentFile
 from django.db.models import Q
 from django.http import JsonResponse
@@ -256,7 +257,7 @@ def _handle_entry_payload(local_author: Author, payload: dict):
     if not isinstance(author_data, dict):
         raise ValueError("Entry payload is missing valid 'author' object.")
 
-    remote_author = _upsert_remote_author(author_data)
+    remote_author = upsert_remote_author(author_data)
 
     entry_fqid = payload.get("id")
     if not entry_fqid:
