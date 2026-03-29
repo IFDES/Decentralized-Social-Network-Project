@@ -20,28 +20,6 @@ class Author(models.Model):
     class Meta:
         ordering = ["-created_at"]
 
-    def save(self, *args, **kwargs):
-        super().save(*args, **kwargs)
-        # Local authors from signup/admin often have no fqid; follow payloads use
-        # author_to_json() which falls back to SERVICE_BASE_URL. Persist canonical
-        # URLs so federation matches the deployed host even if env drifts.
-        if self.is_local and not self.fqid:
-            from config.core.serializers import (
-                build_author_host,
-                build_author_id,
-                build_author_web,
-            )
-
-            fqid = build_author_id(self)
-            host_val = self.host or build_author_host()
-            web_val = self.web or build_author_web(self)
-            Author.objects.filter(pk=self.pk).update(
-                fqid=fqid, host=host_val, web=web_val
-            )
-            self.fqid = fqid
-            self.host = host_val
-            self.web = web_val
-
     def __str__(self):
         return self.display_name
 
