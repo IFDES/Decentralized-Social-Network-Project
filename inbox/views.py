@@ -99,8 +99,10 @@ def _consolidate_follow_author(rel, remote_author, direction="outgoing"):
 def _handle_follow_payload(local_author: Author, payload: dict):
     actor_data = payload.get("actor")
     object_data = payload.get("object")
-    state = payload.get("state", "requesting")
-
+    state = payload.get("state")
+        if state is None:
+            raise ValueError("Follow payload is missing 'state'.")
+            
     if not isinstance(actor_data, dict):
         raise ValueError("Follow payload is missing valid 'actor' author object.")
     if not isinstance(object_data, dict):
@@ -140,8 +142,9 @@ def _handle_follow_payload(local_author: Author, payload: dict):
     elif state in ("accepted", "rejected"):
         object_id = object_data.get("id")
 
-        if local_author.fqid and object_id and local_author.fqid != object_id:
-            raise ValueError("Inbox payload object does not match target local author.")
+        if local_author.fqid and object_id:
+            if normalize_author_fqid(local_author.fqid) != normalize_author_fqid(object_id):
+                raise ValueError("Inbox payload object does not match target local author.")
 
         remote_followee = upsert_remote_author(actor_data)
         if remote_followee.pk == local_author.pk:
@@ -166,21 +169,19 @@ def _handle_follow_payload(local_author: Author, payload: dict):
                 _consolidate_follow_author(rel, remote_followee, direction="outgoing")
 
         if rel is None:
-            rel = FollowRelationship.objects.create(
-                follower=local_author,
-                followee=remote_followee,
-                status=new_status,
+            raise ValueError(
+                "No existing outgoing follow request matches this follow state update."
             )
-        else:
-            changed = False
-            if rel.followee_id != remote_followee.pk:
-                rel.followee = remote_followee
-                changed = True
-            if rel.status != new_status:
-                rel.status = new_status
-                changed = True
-            if changed:
-                rel.save(update_fields=["followee", "status", "updated_at"])
+
+        changed = False
+        if rel.followee_id != remote_followee.pk:
+            rel.followee = remote_followee
+            changed = True
+        if rel.status != new_status:
+            rel.status = new_status
+            changed = True
+        if changed:
+            rel.save(update_fields=["followee", "status", "updated_at"])
 
     elif state == "withdrawn":
         remote_unfollower = upsert_remote_author(actor_data)
