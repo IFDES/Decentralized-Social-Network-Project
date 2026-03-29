@@ -25,13 +25,17 @@ logger = logging.getLogger(__name__)
 def _author_api_id(request: HttpRequest, author: Author) -> str:
     if author.fqid:
         return author.fqid
-    return urljoin(request.build_absolute_uri("/"), f"api/authors/{author.uuid}")
+    from django.conf import settings
+    base = settings.SERVICE_BASE_URL.rstrip("/")
+    return f"{base}/api/authors/{author.uuid}"
 
 
 def _author_to_dict(request: HttpRequest, author: Author) -> dict:
+    from django.conf import settings
     fqid = _author_api_id(request, author)
-    host = author.host or urljoin(request.build_absolute_uri("/"), "api/")
-    web = author.web or urljoin(request.build_absolute_uri("/"), f"authors/{author.uuid}")
+    base = settings.SERVICE_BASE_URL.rstrip("/")
+    host = author.host or f"{base}/api/"
+    web = author.web or f"{base}/authors/{author.uuid}"
 
     return {
         "type": "author",
