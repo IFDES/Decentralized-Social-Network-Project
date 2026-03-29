@@ -138,5 +138,76 @@ urlpatterns = [
         "api/authors/<uuid:author_id>/entries/<uuid:entry_id>/likes/",
         interactions_views.entry_likes_api,
     ),
+
+    # --- Commented API (serial-based) ---
+    path(
+        "api/authors/<uuid:author_id>/commented",
+        interactions_views.author_commented_api,
+        name="author-commented-api",
+    ),
+    path(
+        "api/authors/<uuid:author_id>/commented/",
+        interactions_views.author_commented_api,
+    ),
+    path(
+        "api/authors/<uuid:author_id>/commented/<uuid:comment_id>/likes",
+        interactions_views.commented_likes_api,
+        name="commented-likes-api",
+    ),
+    path(
+        "api/authors/<uuid:author_id>/commented/<uuid:comment_id>/likes/",
+        interactions_views.commented_likes_api,
+    ),
+    path(
+        "api/authors/<uuid:author_id>/commented/<uuid:comment_id>",
+        interactions_views.author_commented_detail_api,
+        name="author-commented-detail-api",
+    ),
+    path(
+        "api/authors/<uuid:author_id>/commented/<uuid:comment_id>/",
+        interactions_views.author_commented_detail_api,
+    ),
+
+    # --- Liked API (serial-based) ---
+    path(
+        "api/authors/<uuid:author_id>/liked",
+        interactions_views.author_liked_api,
+        name="author-liked-api",
+    ),
+    path(
+        "api/authors/<uuid:author_id>/liked/",
+        interactions_views.author_liked_api,
+    ),
+    path(
+        "api/authors/<uuid:author_id>/liked/<uuid:like_id>",
+        interactions_views.author_liked_detail_api,
+        name="author-liked-detail-api",
+    ),
+    path(
+        "api/authors/<uuid:author_id>/liked/<uuid:like_id>/",
+        interactions_views.author_liked_detail_api,
+    ),
+
+    # --- FQID shortcut routes ---
+    path(
+        "api/entries/<path:entry_fqid>/comments",
+        interactions_views.entry_fqid_comments_api,
+        name="entry-fqid-comments-api",
+    ),
+    path(
+        "api/entries/<path:entry_fqid>/likes",
+        interactions_views.entry_fqid_likes_api,
+        name="entry-fqid-likes-api",
+    ),
+    path(
+        "api/commented/<path:comment_fqid>",
+        interactions_views.commented_fqid_api,
+        name="commented-fqid-api",
+    ),
+    path(
+        "api/liked/<path:like_fqid>",
+        interactions_views.liked_fqid_api,
+        name="liked-fqid-api",
+    ),
 ]
 
