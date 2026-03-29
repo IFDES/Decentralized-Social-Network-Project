@@ -128,15 +128,9 @@ def distribute_entry_to_remote_followers(entry: Entry) -> None:
     - FRIENDS entries → only remote friends (mutual APPROVED follow)
     - DELETED entries → remote approved followers and remote friends (best effort
       to notify all nodes that may have received an earlier version)
-    - UNLISTED entries → not distributed
+    - UNLISTED entries → pushed to all remote approved followers and friends
+      so they can update the visibility on their local copy
     """
-    if entry.visibility not in (
-        Entry.VISIBILITY_PUBLIC,
-        Entry.VISIBILITY_FRIENDS,
-        Entry.VISIBILITY_DELETED,
-    ):
-        return
-
     author = entry.author
 
     if entry.visibility == Entry.VISIBILITY_PUBLIC:
@@ -156,7 +150,7 @@ def distribute_entry_to_remote_followers(entry: Entry) -> None:
         friends = FollowRelationship.friends_of(author).filter(is_local=False)
         recipients = friends
     else:
-        # DELETED: notify both remote approved followers and remote friends.
+        # DELETED / UNLISTED: notify both remote approved followers and remote friends.
         remote_follower_ids = (
             FollowRelationship.objects.filter(
                 followee=author,
