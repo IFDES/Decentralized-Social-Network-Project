@@ -100,9 +100,9 @@ def _handle_follow_payload(local_author: Author, payload: dict):
     actor_data = payload.get("actor")
     object_data = payload.get("object")
     state = payload.get("state")
-        if state is None:
-            raise ValueError("Follow payload is missing 'state'.")
-            
+    if state is None:
+        raise ValueError("Follow payload is missing 'state'.")
+
     if not isinstance(actor_data, dict):
         raise ValueError("Follow payload is missing valid 'actor' author object.")
     if not isinstance(object_data, dict):
