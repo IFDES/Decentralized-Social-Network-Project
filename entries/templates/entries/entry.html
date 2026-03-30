@@ -38,12 +38,11 @@
 
   <!-- Content -->
   <div class="entry-card__content">
-    {% if entry.content and (entry.content_type == "text/markdown" or entry.content_type == "text/plain") %}
-      {% if entry.content_type == "text/markdown" %}
-        <div class="entry-markdown">{{ entry.content|render_markdown|safe }}</div>
-      {% else %}
-        <pre>{{ entry.content }}</pre>
-      {% endif %}
+    {% if entry.content and entry.content_type == "text/markdown" %}
+      <div class="entry-markdown">{{ entry.content|render_markdown|safe }}</div>
+    {% endif %}
+    {% if entry.content and entry.content_type == "text/plain" %}
+      <pre>{{ entry.content }}</pre>
     {% endif %}
     {% with hosted_images=entry.hosted_images.all %}
       {% if hosted_images %}
