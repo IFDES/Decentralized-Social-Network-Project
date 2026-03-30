@@ -175,43 +175,22 @@ def _reconcile_hosted_images(request: HttpRequest, entry: Entry) -> None:
 
 
 def _should_ingest_remote_entry_for_viewer(entry_payload: dict, remote_author: Author, viewer: Author | None) -> bool:
-    visibility = (entry_payload.get("visibility") or Entry.VISIBILITY_PUBLIC).upper()
+    """
+    Decide whether to ingest a pulled remote entry into our DB.
 
-    if visibility == Entry.VISIBILITY_DELETED:
-        return False
-
-    if viewer is None:
-        return visibility == Entry.VISIBILITY_PUBLIC
-
-    if visibility == Entry.VISIBILITY_PUBLIC:
-        return True
-
-    if visibility == Entry.VISIBILITY_UNLISTED:
-        if viewer is None:
-            return False
-        return FollowRelationship.objects.filter(
-            follower=viewer,
-            followee=remote_author,
-            status=FollowRelationship.Status.APPROVED,
-        ).exists()
-
-    if visibility == Entry.VISIBILITY_FRIENDS:
-        return False
-
-    if visibility == Entry.VISIBILITY_FRIENDS:
-        return FollowRelationship.are_friends(viewer, remote_author)
-
-    return False
+    Current policy: ingest anything that looks like a dict; visibility is
+    enforced at read time (stream/detail), not at pull time.
+    """
+    return isinstance(entry_payload, dict)
 
 def _sync_remote_entries_for_stream(viewer: Author | None):
     """
     Sync remote entries for the stream.
 
-    Requirement:
-    - Always ingest remote `PUBLIC` entries even when the viewer is not
-      following the remote author.
-    - Only remote `PUBLIC` entries are ingested; UNLISTED/Friends are left
-      to inbox distribution and/or direct visibility rules.
+    Requirement (relaxed):
+    - Ingest ALL remote entries we can pull (PUBLIC/UNLISTED/FRIENDS/DELETED).
+      Our own visibility rules (stream/detail) decide what is actually shown
+      to local viewers; the pull layer should not drop anything.
     """
     if viewer is None:
         return
