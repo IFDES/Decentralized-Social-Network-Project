@@ -93,6 +93,7 @@ def follow_ui_page(request: HttpRequest) -> HttpResponse:
                 "incoming_requests": [],
                 "followers_approved": [],
                 "friends": [],
+                "remote_authors_to_follow": [],
             },
         )
 
@@ -147,6 +148,76 @@ def follow_ui_page(request: HttpRequest) -> HttpResponse:
 
     friends = list(FollowRelationship.friends_of(me).order_by("display_name"))
 
+    # Discover remote authors so users can follow them and so we can
+    # ingest their PUBLIC entries into the local stream.
+    remote_authors_to_follow = []
+    try:
+        from config.core.models import RemoteNode
+        from config.core.request_utils import make_node_request
+        from entries.remote_ingest import upsert_remote_author
+
+        remote_nodes = RemoteNode.objects.filter(is_active=True).order_by("-added_at")
+        existing_followee_ids = set(rel_by_followee_id.keys())
+
+        discovered_remote_authors_by_id = {}
+        page_size = 50
+        max_pages_per_node = 50  # safety to avoid unbounded UI/network calls
+
+        for node in remote_nodes:
+            page = 1
+            for _ in range(max_pages_per_node):
+                try:
+                    resp = make_node_request(
+                        node,
+                        "GET",
+                        "api/authors",
+                        params={"page": page, "size": page_size},
+                    )
+                except Exception:
+                    break
+
+                if resp.status_code < 200 or resp.status_code >= 300:
+                    break
+
+                try:
+                    payload = resp.json()
+                except Exception:
+                    break
+
+                authors_payload = payload.get("authors") or []
+                if not isinstance(authors_payload, list) or not authors_payload:
+                    break
+
+                for author_data in authors_payload:
+                    if not isinstance(author_data, dict):
+                        continue
+                    try:
+                        remote_author = upsert_remote_author(author_data)
+                    except Exception:
+                        continue
+                    if remote_author.is_deleted or remote_author.is_local:
+                        continue
+                    discovered_remote_authors_by_id[remote_author.pk] = remote_author
+
+                count = payload.get("count")
+                if isinstance(count, int):
+                    if (page * page_size) >= count:
+                        break
+                if len(authors_payload) < page_size:
+                    break
+
+                page += 1
+
+        discovered_remote_authors = list(discovered_remote_authors_by_id.values())
+        discovered_remote_authors.sort(key=lambda a: a.display_name)
+
+        # Only show follow actions for authors we are not already following (requesting or approved).
+        remote_authors_to_follow = [
+            a for a in discovered_remote_authors if a.pk not in existing_followee_ids and a.uuid != me.uuid
+        ]
+    except Exception:
+        remote_authors_to_follow = []
+
     return render(
         request,
         "follows/follow_ui.html",
@@ -158,6 +229,7 @@ def follow_ui_page(request: HttpRequest) -> HttpResponse:
             "incoming_requests": incoming_requests,
             "followers_approved": followers_approved,
             "friends": friends,
+            "remote_authors_to_follow": remote_authors_to_follow,
         },
     )
 
@@ -567,6 +639,8 @@ def follow_requests_list(request: HttpRequest, author_serial):
     return JsonResponse(
         {
             "type": "follow_requests",
+            # Historical key name was `items`; keep both for compatibility.
             "requests": [follow_to_json(rel) for rel in rels],
+            "items": [follow_to_json(rel) for rel in rels],
         }
     )

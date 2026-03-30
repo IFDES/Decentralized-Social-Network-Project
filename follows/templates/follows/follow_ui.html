@@ -79,6 +79,27 @@
       </div>
 
       <div class="column">
+        <h2>Remote authors (discover)</h2>
+        {% if remote_authors_to_follow %}
+          <ul>
+            {% for a in remote_authors_to_follow %}
+              <li>
+                {{ a.display_name }}
+                <span class="pill pill-approved">remote</span>
+                <form action="{% url 'follows:follow-remote' %}" method="post" style="display:inline;">
+                  {% csrf_token %}
+                  <input type="hidden" name="remote_author_fqid" value="{{ a.fqid }}">
+                  <button type="submit">Follow</button>
+                </form>
+              </li>
+            {% endfor %}
+          </ul>
+        {% else %}
+          <p class="note">No remote authors discovered (or none available to follow).</p>
+        {% endif %}
+      </div>
+
+      <div class="column">
         <h2>Follow remote author</h2>
         <p class="note">
           Paste the remote author's FQID, for example:

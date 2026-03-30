@@ -358,6 +358,27 @@ class StreamApiTests(TestCase):
         self.assertNotIn(str(other_unlisted_entry.fqid), returned_ids)
         self.assertIn(str(public_entry.fqid), returned_ids)
 
+    def test_stream_includes_remote_public_entries_without_follow(self):
+        """
+        Remote authors' PUBLIC entries should show in stream even when the
+        viewer isn't following them.
+        """
+        remote_author = Author.objects.create(display_name="Remote", is_local=False)
+        remote_entry = Entry.objects.create(
+            author=remote_author,
+            title="Remote public",
+            content="Visible one",
+            visibility=Entry.VISIBILITY_PUBLIC,
+        )
+
+        self.client.login(username="stream_owner", password="passA12345")
+        response = self.client.get(reverse("entries:stream-api"))
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+
+        returned_ids = [item["id"] for item in payload["src"]]
+        self.assertIn(str(remote_entry.fqid), returned_ids)
+
     def test_stream_returns_latest_edited_version_once(self):
         entry = Entry.objects.create(
             author=self.author,

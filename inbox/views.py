@@ -702,7 +702,8 @@ def _remote_entry_allowed_for_recipient(local_author: Author, payload: dict) -> 
     local_author's inbox.
 
     Rule:
-    - PUBLIC and UNLISTED: allowed only if local_author follows the remote author
+    - PUBLIC: always allowed (public entries can be delivered to anyone).
+    - UNLISTED: allowed only if local_author follows the remote author
       with APPROVED status.
     - FRIENDS: allowed only if local_author and remote author are mutual approved friends.
     - DELETED: allow if there was previously an approved follow/friend relationship,
@@ -710,7 +711,7 @@ def _remote_entry_allowed_for_recipient(local_author: Author, payload: dict) -> 
     """
     author_data = payload.get("author")
     if not isinstance(author_data, dict):
-        return False
+        raise ValueError("Entry payload is missing valid 'author' object.")
 
     remote_author = upsert_remote_author(author_data)
     visibility = (payload.get("visibility") or Entry.VISIBILITY_PUBLIC).upper()
@@ -721,7 +722,10 @@ def _remote_entry_allowed_for_recipient(local_author: Author, payload: dict) -> 
         status=FollowRelationship.Status.APPROVED,
     ).exists()
 
-    if visibility in (Entry.VISIBILITY_PUBLIC, Entry.VISIBILITY_UNLISTED):
+    if visibility == Entry.VISIBILITY_PUBLIC:
+        return True
+
+    if visibility == Entry.VISIBILITY_UNLISTED:
         return approved_follow
 
     if visibility == Entry.VISIBILITY_FRIENDS:

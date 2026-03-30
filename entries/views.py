@@ -195,57 +195,62 @@ def _should_ingest_remote_entry_for_viewer(entry_payload: dict, remote_author: A
     return False
 
 def _sync_remote_entries_for_stream(viewer: Author | None):
+    """
+    Sync remote entries for the stream.
+
+    Requirement:
+    - Always ingest remote `PUBLIC` entries even when the viewer is not
+      following the remote author.
+    - Only remote `PUBLIC` entries are ingested; UNLISTED/Friends are left
+      to inbox distribution and/or direct visibility rules.
+    """
     if viewer is None:
         return
 
-    followed_ids = set(
-        FollowRelationship.objects.filter(
-            follower=viewer,
-            status=FollowRelationship.Status.APPROVED,
-            followee__is_local=False,
-            followee__is_deleted=False,
-        ).values_list("followee_id", flat=True)
-    )
-    if not followed_ids:
+    from config.core.models import RemoteNode
+
+    remote_nodes = RemoteNode.objects.filter(is_active=True)
+    if not remote_nodes.exists():
         return
 
-    remote_authors = Author.objects.filter(pk__in=followed_ids)
-
-    for remote_author in remote_authors:
+    for remote_node in remote_nodes:
         try:
-            remote_node = _get_remote_node_for_author(remote_author)
-            url = _remote_entries_url_for_author(remote_author)
-
-            status_code, data = _get_json_basic_auth(
-                url=url,
-                username=remote_node.outgoing_username,
-                password=remote_node.outgoing_password,
+            remote_authors = Author.objects.filter(
+                is_local=False,
+                is_deleted=False,
+                fqid__startswith=remote_node.base_url.rstrip("/"),
             )
-
-            if status_code < 200 or status_code >= 300:
-                continue
-
-            items = data.get("src") or data.get("items") or []
-            if not isinstance(items, list):
-                continue
-
-            for payload in items:
-                if not isinstance(payload, dict):
-                    continue
-
-                if not _should_ingest_remote_entry_for_viewer(payload, remote_author, viewer):
-                    continue
-
-                # reuse your inbox logic here if moved to shared helper
-                try:
-                    handle_remote_entry_payload(payload)
-                except Exception as exc:
-                    print(f"Failed ingesting remote entry: {exc}")
-                    continue
-
-        except Exception as exc:
-            print(f"Failed ingesting remote entry: {exc}")
+        except Exception:
             continue
+
+        for remote_author in remote_authors:
+            try:
+                url = _remote_entries_url_for_author(remote_author)
+
+                status_code, data = _get_json_basic_auth(
+                    url=url,
+                    username=remote_node.outgoing_username,
+                    password=remote_node.outgoing_password,
+                )
+
+                if status_code < 200 or status_code >= 300:
+                    continue
+
+                items = data.get("src") or data.get("items") or []
+                if not isinstance(items, list):
+                    continue
+
+                for payload in items:
+                    if not isinstance(payload, dict):
+                        continue
+                    if not _should_ingest_remote_entry_for_viewer(payload, remote_author, viewer):
+                        continue
+                    try:
+                        handle_remote_entry_payload(payload)
+                    except Exception:
+                        continue
+            except Exception:
+                continue
 
 # This file is assisted by CoPilot on 27 Feb 2026 02:10 with the prompt
 # "Help me create a views.py file for entries in Django"
@@ -325,6 +330,7 @@ def _entry_to_json(request: HttpRequest, entry: Entry) -> dict:
         "comments": comments_payload,
         "likes": likes_payload,
         "published": entry.published.astimezone(timezone.utc).isoformat(),
+        "updated_at": entry.updated_at.astimezone(timezone.utc).isoformat(),
         "visibility": entry.visibility,
     }
 
@@ -429,11 +435,11 @@ def _stream_entries_queryset(request: HttpRequest | None = None):
             Q(author_id__in=following_ids)
         )
         |
-        # remote public behaves like unlisted: approved follow required
+        # remote public: visible even when viewer isn't following the author
         (
             Q(author__is_local=False) &
             Q(visibility=Entry.VISIBILITY_PUBLIC) &
-            Q(author_id__in=following_ids)
+            Q(author_id__isnull=False)
         )
         |
         # remote unlisted also requires approved follow
@@ -462,7 +468,7 @@ def stream_page(request: HttpRequest) -> HttpResponse:
     current_author = _get_current_author(request)
 
     # Pull remote entries first so they exist locally
-    # _sync_remote_entries_for_stream(current_author)
+    _sync_remote_entries_for_stream(current_author)
 
     entries = list(_stream_entries_queryset(request))
     entry_ids = [e.uuid for e in entries]
@@ -1198,7 +1204,7 @@ def image_upload_api(request: HttpRequest, author_id: UUID) -> HttpResponse:
 @require_http_methods(["GET"])
 def stream_api(request: HttpRequest) -> HttpResponse:
     current_author = _get_current_author(request)
-    # _sync_remote_entries_for_stream(current_author)
+    _sync_remote_entries_for_stream(current_author)
 
     queryset = _stream_entries_queryset(request)
     page_number, size, count, page_items = _paginate_queryset(request, queryset)
@@ -1415,8 +1421,8 @@ def _remote_node_allowed_visibilities(request: HttpRequest, author: Author) -> l
     which visibilities should be exposed to that remote node.
 
     Tightened rule:
-    - Do NOT expose PUBLIC to remote nodes by default.
-    - Expose PUBLIC/UNLISTED only if at least one remote author on that node has an
+    - Expose PUBLIC entries to remote nodes (so federation nodes can fetch the public feed).
+    - Expose UNLISTED entries only if at least one remote author on that node has an
       APPROVED follow relationship to this local author.
     - Expose FRIENDS only if at least one remote author on that node is a mutual friend.
     """
@@ -1434,7 +1440,7 @@ def _remote_node_allowed_visibilities(request: HttpRequest, author: Author) -> l
         fqid__startswith=remote_node.base_url.rstrip("/"),
     )
 
-    allowed = []
+    allowed = [Entry.VISIBILITY_PUBLIC]
 
     has_approved_follower = FollowRelationship.objects.filter(
         follower__in=remote_authors,
@@ -1443,10 +1449,7 @@ def _remote_node_allowed_visibilities(request: HttpRequest, author: Author) -> l
     ).exists()
 
     if has_approved_follower:
-        allowed.extend([
-            Entry.VISIBILITY_PUBLIC,
-            Entry.VISIBILITY_UNLISTED,
-        ])
+        allowed.extend([Entry.VISIBILITY_UNLISTED])
 
     has_friend = FollowRelationship.objects.filter(
         follower__in=remote_authors,
