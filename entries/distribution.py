@@ -41,8 +41,8 @@ def _entry_to_inbox_json(entry: Entry) -> dict:
     content = entry.content or ""
     content_type = entry.content_type or Entry.CONTENT_TEXT_PLAIN
 
-    # Image entries are federated as normal `entry` objects whose
-    # `contentType` is `image/*;base64` and whose `content` is the base64 data.
+    # Image entries are federated as normal `entry` objects whose `content`
+    # contains base64 bytes. `contentType` is simplified to `Image`.
     if (
         content_type in Entry.IMAGE_BASE64_CONTENT_TYPES
         or content_type == Entry.CONTENT_IMAGE_LEGACY
@@ -52,15 +52,8 @@ def _entry_to_inbox_json(entry: Entry) -> dict:
         if hosted and hosted.file:
             raw = hosted.file.read()
             content = base64.b64encode(raw).decode("ascii")
-
-            if content_type == Entry.CONTENT_IMAGE_LEGACY or content_type.startswith("image/"):
-                guessed = mimetypes.guess_type(hosted.file.name)[0] or ""
-                content_type = {
-                    "image/png": Entry.CONTENT_IMAGE_PNG_BASE64,
-                    "image/jpeg": Entry.CONTENT_IMAGE_JPEG_BASE64,
-                    "image/gif": Entry.CONTENT_IMAGE_GIF_BASE64,
-                    "image/webp": Entry.CONTENT_IMAGE_WEBP_BASE64,
-                }.get(guessed, Entry.CONTENT_APPLICATION_BASE64)
+            # Normalize all image base64 payloads to a single contentType.
+            content_type = Entry.CONTENT_IMAGE
 
         # For image entries we don't send textual description/content.
         description = ""
@@ -143,8 +136,8 @@ def distribute_entry_to_remote_followers(entry: Entry) -> None:
         # FRIENDS visibility: mutual APPROVED follow, remote only
         friends = FollowRelationship.friends_of(author).filter(is_local=False)
         recipients = friends
-    else:
-        # DELETED / UNLISTED: notify both remote approved followers and remote friends.
+    elif entry.visibility == Entry.VISIBILITY_DELETED:
+        # DELETED: notify both remote approved followers and remote friends (best effort).
         remote_follower_ids = (
             FollowRelationship.objects.filter(
                 followee=author,
@@ -159,6 +152,10 @@ def distribute_entry_to_remote_followers(entry: Entry) -> None:
             pk__in=set(remote_follower_ids).union(set(remote_friend_ids)),
             is_deleted=False,
         )
+    else:
+        # UNLISTED is not pushed on entry create/update; recipients can retrieve
+        # it via direct link or follow-sync mechanisms.
+        return
 
     payload = _entry_to_inbox_json(entry)
     sent_targets: set[tuple[str, str]] = set()

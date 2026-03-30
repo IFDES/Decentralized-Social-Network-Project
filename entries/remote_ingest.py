@@ -91,6 +91,12 @@ def handle_remote_entry_payload(payload: dict):
     if is_base64_image:
         description = ""
 
+    # Normalize all base64 image payloads to the single supported
+    # contentType value.
+    # Normalize all image/base64 payloads to the single marker clients
+    # understand for federated image entries.
+    normalized_content_type = Entry.CONTENT_IMAGE if is_base64_image else content_type
+
     if is_base64_image and not is_deleted and not content:
         raise ValueError("Image entry payload is missing base64 'content'.")
     if not is_deleted and not content and not is_base64_image:
@@ -98,21 +104,24 @@ def handle_remote_entry_payload(payload: dict):
 
     content_to_store = "" if is_base64_image else content
 
-    _content_type_to_ext = {
-        Entry.CONTENT_IMAGE_PNG_BASE64: ".png",
-        Entry.CONTENT_IMAGE_JPEG_BASE64: ".jpg",
-        Entry.CONTENT_IMAGE_GIF_BASE64: ".gif",
-        Entry.CONTENT_IMAGE_WEBP_BASE64: ".webp",
-        Entry.CONTENT_APPLICATION_BASE64: ".png",  # best-effort fallback
-    }
-
     def _decode_and_store_hosted_image(entry: Entry) -> None:
         try:
             image_data = base64.b64decode(content)
         except Exception as exc:
             raise ValueError(f"Failed to decode base64 image content: {exc}") from exc
 
-        ext = _content_type_to_ext.get(content_type) or ".png"
+        # Guess extension from magic numbers. This keeps payload
+        # interoperability even if the sender didn't provide a specific MIME.
+        ext = ".png"
+        if image_data.startswith(b"\x89PNG\r\n\x1a\n"):
+            ext = ".png"
+        elif image_data[:3] == b"\xff\xd8\xff":
+            ext = ".jpg"
+        elif image_data[:6] in (b"GIF87a", b"GIF89a"):
+            ext = ".gif"
+        elif image_data[:4] == b"RIFF" and image_data[8:12] == b"WEBP":
+            ext = ".webp"
+
         filename = f"remote_{uuid_mod.uuid4().hex}{ext}"
 
         # Idempotent: replace hosted image(s) for this entry.
@@ -131,7 +140,7 @@ def handle_remote_entry_payload(payload: dict):
             "title": title,
             "description": description,
             "content": content_to_store,
-            "content_type": content_type,
+            "content_type": normalized_content_type,
             "visibility": visibility,
             "web": web,
             "is_deleted": is_deleted,
@@ -154,8 +163,8 @@ def handle_remote_entry_payload(payload: dict):
         if entry.content != content_to_store:
             entry.content = content_to_store
             changed = True
-        if entry.content_type != content_type:
-            entry.content_type = content_type
+        if entry.content_type != normalized_content_type:
+            entry.content_type = normalized_content_type
             changed = True
         if entry.visibility != visibility:
             entry.visibility = visibility

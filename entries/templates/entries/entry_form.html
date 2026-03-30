@@ -42,7 +42,7 @@
       var contentEl = document.querySelector('[name="content"]');
       function isImageType(value) {
         if (!value) return false;
-        return value === 'image' || value === 'application/base64' || value.startsWith('image/');
+        return value === 'Image' || value === 'image';
       }
       function toggleTextFields() {
         var shouldDisable = isImageType(ct.value);

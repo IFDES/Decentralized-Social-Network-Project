@@ -234,19 +234,24 @@ def _handle_follow_payload(local_author: Author, payload: dict):
 
 
 _BASE64_IMAGE_CONTENT_TYPES = {
+    # Image entries are sent as base64 in `content`.
+    # We accept multiple historical markers but normalize to the current
+    # project-wide representation at ingest time.
+    "Image",
+    "application/base64",
     "image/png;base64",
     "image/jpeg;base64",
     "image/gif;base64",
     "image/webp;base64",
-    "application/base64",
 }
 
 _CONTENT_TYPE_TO_EXT = {
+    "Image": ".png",  # best-effort fallback (actual format guessed during ingest)
+    "application/base64": ".png",  # best-effort fallback
     "image/png;base64": ".png",
     "image/jpeg;base64": ".jpg",
     "image/gif;base64": ".gif",
     "image/webp;base64": ".webp",
-    "application/base64": ".png",  # best-effort fallback
 }
 
 

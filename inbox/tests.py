@@ -179,7 +179,7 @@ class InboxImageEntryTests(_InboxTestMixin, TestCase):
             "id": "https://remote.example/api/authors/remote-image-author-1/entries/img-1",
             "title": "Image",
             "description": "",
-            "contentType": "image/png;base64",
+            "contentType": "Image",
             "content": png_base64,
             "visibility": "PUBLIC",
             "web": "https://remote.example/authors/remote-image-author-1/entries/img-1",
@@ -190,7 +190,7 @@ class InboxImageEntryTests(_InboxTestMixin, TestCase):
         self.assertIn(resp.status_code, (200, 201))
 
         entry = Entry.objects.get(fqid=payload["id"])
-        self.assertEqual(entry.content_type, "image/png;base64")
+        self.assertEqual(entry.content_type, "Image")
         self.assertEqual(entry.content, "")
         self.assertGreaterEqual(entry.hosted_images.count(), 1)
 

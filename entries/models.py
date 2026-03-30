@@ -69,36 +69,23 @@ class Entry(models.Model):
     CONTENT_TEXT_PLAIN = "text/plain"
     CONTENT_TEXT_MARKDOWN = "text/markdown"
 
-    # Federation/API content types for base64-encoded image entries.
-    # For these, `Entry.content` may be empty on storage nodes, but when
-    # distributing federated `entry` payloads we will (re)encode from the
-    # HostedImage file so remote nodes can decode and ingest.
-    CONTENT_IMAGE_PNG_BASE64 = "image/png;base64"
-    CONTENT_IMAGE_JPEG_BASE64 = "image/jpeg;base64"
-    CONTENT_IMAGE_GIF_BASE64 = "image/gif;base64"
-    CONTENT_IMAGE_WEBP_BASE64 = "image/webp;base64"
-    CONTENT_APPLICATION_BASE64 = "application/base64"
+    # Federated/API image entry marker.
+    # The client sends base64 bytes in `content`; this value avoids needing
+    # clients to spell MIME types or the word "base64".
+    CONTENT_IMAGE = "Image"
 
-    IMAGE_BASE64_CONTENT_TYPES = {
-        CONTENT_IMAGE_PNG_BASE64,
-        CONTENT_IMAGE_JPEG_BASE64,
-        CONTENT_IMAGE_GIF_BASE64,
-        CONTENT_IMAGE_WEBP_BASE64,
-        CONTENT_APPLICATION_BASE64,
-    }
-
-    # Legacy DB value supported by older migrations/UI.
+    # Legacy DB value / older clients.
     CONTENT_IMAGE_LEGACY = "image"
+
+    # Older payload marker we still accept for backward compatibility.
+    CONTENT_IMAGE_BASE64_LEGACY = "application/base64"
+
+    IMAGE_BASE64_CONTENT_TYPES = {CONTENT_IMAGE, CONTENT_IMAGE_BASE64_LEGACY}
 
     CONTENT_TYPE_CHOICES = [
         (CONTENT_TEXT_PLAIN, "Plain text"),
         (CONTENT_TEXT_MARKDOWN, "CommonMark"),
-        (CONTENT_IMAGE_PNG_BASE64, "PNG (base64)"),
-        (CONTENT_IMAGE_JPEG_BASE64, "JPEG (base64)"),
-        (CONTENT_IMAGE_GIF_BASE64, "GIF (base64)"),
-        (CONTENT_IMAGE_WEBP_BASE64, "WebP (base64)"),
-        (CONTENT_APPLICATION_BASE64, "Image (base64; unknown type)"),
-        (CONTENT_IMAGE_LEGACY, "Image (legacy)"),
+        (CONTENT_IMAGE, "Image"),
     ]
 
     uuid = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)

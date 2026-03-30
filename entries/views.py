@@ -831,13 +831,8 @@ def entry_create_page(request: HttpRequest, author_id: UUID) -> HttpResponse:
                 hosted = entry.hosted_images.first()
                 if hosted is None:
                     return HttpResponseBadRequest("Image entries require at least one image.")
-                guessed = mimetypes.guess_type(hosted.file.name)[0] or ""
-                entry.content_type = {
-                    "image/png": Entry.CONTENT_IMAGE_PNG_BASE64,
-                    "image/jpeg": Entry.CONTENT_IMAGE_JPEG_BASE64,
-                    "image/gif": Entry.CONTENT_IMAGE_GIF_BASE64,
-                    "image/webp": Entry.CONTENT_IMAGE_WEBP_BASE64,
-                }.get(guessed, Entry.CONTENT_APPLICATION_BASE64)
+                # Normalize all image entries to a single federation/API value.
+                entry.content_type = Entry.CONTENT_IMAGE
                 entry.description = ""
                 entry.content = ""
                 entry.save(update_fields=["content_type", "description", "content"])
@@ -898,13 +893,7 @@ def entry_edit_page(
                 hosted = entry.hosted_images.first()
                 if hosted is None:
                     return HttpResponseBadRequest("Image entries require at least one image.")
-                guessed = mimetypes.guess_type(hosted.file.name)[0] or ""
-                entry.content_type = {
-                    "image/png": Entry.CONTENT_IMAGE_PNG_BASE64,
-                    "image/jpeg": Entry.CONTENT_IMAGE_JPEG_BASE64,
-                    "image/gif": Entry.CONTENT_IMAGE_GIF_BASE64,
-                    "image/webp": Entry.CONTENT_IMAGE_WEBP_BASE64,
-                }.get(guessed, Entry.CONTENT_APPLICATION_BASE64)
+                entry.content_type = Entry.CONTENT_IMAGE
                 entry.description = ""
                 entry.content = ""
                 entry.save(update_fields=["content_type", "description", "content"])
@@ -1036,7 +1025,7 @@ def _entry_content_type_is_image(content_type: str | None) -> bool:
         content_type == Entry.CONTENT_IMAGE_LEGACY
         or content_type in Entry.IMAGE_BASE64_CONTENT_TYPES
         or content_type.startswith("image/")
-        or content_type == Entry.CONTENT_APPLICATION_BASE64
+        or content_type == Entry.CONTENT_IMAGE
     )
 
 
@@ -1051,22 +1040,23 @@ def _materialize_base64_image_entry(entry: Entry, uploaded_by: Author) -> None:
     if not _entry_content_type_is_image(entry.content_type):
         return
 
-    content_type = entry.content_type
-    _content_type_to_ext = {
-        Entry.CONTENT_IMAGE_PNG_BASE64: ".png",
-        Entry.CONTENT_IMAGE_JPEG_BASE64: ".jpg",
-        Entry.CONTENT_IMAGE_GIF_BASE64: ".gif",
-        Entry.CONTENT_IMAGE_WEBP_BASE64: ".webp",
-        Entry.CONTENT_APPLICATION_BASE64: ".png",  # best-effort fallback
-        Entry.CONTENT_IMAGE_LEGACY: ".png",
-    }
-    ext = _content_type_to_ext.get(content_type) or ".png"
-    filename = f"entry_{entry.uuid.hex}{ext}"
-
     try:
         image_data = base64.b64decode(entry.content)
     except Exception as exc:
         raise ValueError(f"Invalid base64 image content: {exc}") from exc
+
+    # Guess extension from image bytes.
+    ext = ".png"
+    if image_data.startswith(b"\x89PNG\r\n\x1a\n"):
+        ext = ".png"
+    elif image_data[:3] == b"\xff\xd8\xff":
+        ext = ".jpg"
+    elif image_data[:6] in (b"GIF87a", b"GIF89a"):
+        ext = ".gif"
+    elif image_data[:4] == b"RIFF" and image_data[8:12] == b"WEBP":
+        ext = ".webp"
+
+    filename = f"entry_{entry.uuid.hex}{ext}"
 
     entry.hosted_images.all().delete()
     HostedImage.objects.create(
@@ -1308,7 +1298,14 @@ def author_entries_api(request: HttpRequest, author_id: UUID) -> HttpResponse:
         return HttpResponseBadRequest("Field 'content' is required.")
 
     if content_type not in dict(Entry.CONTENT_TYPE_CHOICES):
-        return HttpResponseBadRequest("Unsupported contentType.")
+        # Accept legacy federation image contentTypes even though the UI
+        # only offers a single base64 value.
+        if not _entry_content_type_is_image(content_type):
+            return HttpResponseBadRequest("Unsupported contentType.")
+
+    # Normalize all base64 image contentTypes to the single supported value.
+    if _entry_content_type_is_image(content_type):
+        content_type = Entry.CONTENT_IMAGE
 
     if visibility not in dict(Entry.VISIBILITY_CHOICES):
         return HttpResponseBadRequest("Unsupported visibility value.")
@@ -1372,7 +1369,14 @@ def entry_detail_api(
             return HttpResponseBadRequest("Field 'content' is required.")
 
         if content_type not in dict(Entry.CONTENT_TYPE_CHOICES):
-            return HttpResponseBadRequest("Unsupported contentType.")
+            # Accept legacy federation image contentTypes even though the UI
+            # only offers a single base64 value.
+            if not _entry_content_type_is_image(content_type):
+                return HttpResponseBadRequest("Unsupported contentType.")
+
+        # Normalize all base64 image contentTypes to the single supported value.
+        if _entry_content_type_is_image(content_type):
+            content_type = Entry.CONTENT_IMAGE
 
         if visibility not in dict(Entry.VISIBILITY_CHOICES):
             return HttpResponseBadRequest("Unsupported visibility value.")
