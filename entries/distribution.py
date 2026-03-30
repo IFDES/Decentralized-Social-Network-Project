@@ -5,8 +5,10 @@ Called after a local author creates (or edits) an entry so that remote nodes
 hosting followers can ingest the content.
 """
 
+import base64
 import logging
 from datetime import timezone as tz
+import mimetypes
 from urllib.parse import urlparse
 
 from django.conf import settings
@@ -35,23 +37,46 @@ def _entry_to_inbox_json(entry: Entry) -> dict:
     entry_id = entry.fqid or f"{base}/api/authors/{author.uuid}/entries/{entry.uuid}"
     web = entry.web or f"{base}/authors/{author.uuid}/entries/{entry.uuid}"
 
-    image_urls = [
-        f"{base}/api/media/images/{hosted.uuid}/"
-        for hosted in entry.hosted_images.all()
-    ]
+    description = getattr(entry, "description", "") or ""
+    content = entry.content or ""
+    content_type = entry.content_type or Entry.CONTENT_TEXT_PLAIN
+
+    # Image entries are federated as normal `entry` objects whose
+    # `contentType` is `image/*;base64` and whose `content` is the base64 data.
+    if (
+        content_type in Entry.IMAGE_BASE64_CONTENT_TYPES
+        or content_type == Entry.CONTENT_IMAGE_LEGACY
+        or (isinstance(content_type, str) and content_type.startswith("image/"))
+    ):
+        hosted = entry.hosted_images.first()
+        if hosted and hosted.file:
+            raw = hosted.file.read()
+            content = base64.b64encode(raw).decode("ascii")
+
+            if content_type == Entry.CONTENT_IMAGE_LEGACY or content_type.startswith("image/"):
+                guessed = mimetypes.guess_type(hosted.file.name)[0] or ""
+                content_type = {
+                    "image/png": Entry.CONTENT_IMAGE_PNG_BASE64,
+                    "image/jpeg": Entry.CONTENT_IMAGE_JPEG_BASE64,
+                    "image/gif": Entry.CONTENT_IMAGE_GIF_BASE64,
+                    "image/webp": Entry.CONTENT_IMAGE_WEBP_BASE64,
+                }.get(guessed, Entry.CONTENT_APPLICATION_BASE64)
+
+        # For image entries we don't send textual description/content.
+        description = ""
+        # content_type stays as the image/base64 value (or legacy).
 
     return {
         "type": "entry",
         "title": entry.title,
         "id": entry_id,
         "web": web,
-        "description": getattr(entry, "description", "") or "",
-        "contentType": entry.content_type,
-        "content": entry.content,
+        "description": description,
+        "contentType": content_type,
+        "content": content,
         "author": author_to_json(author),
         "published": entry.published.astimezone(tz.utc).isoformat(),
         "visibility": entry.visibility,
-        "image_urls": image_urls,
     }
 
 

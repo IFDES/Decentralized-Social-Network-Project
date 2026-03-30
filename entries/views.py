@@ -20,6 +20,7 @@ from django.urls import reverse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 from django.http import FileResponse
+from django.core.files.base import ContentFile
 
 from authors.models import Author, AuthorAccount
 from config.core.permissions import user_matches_author_uuid
@@ -818,6 +819,28 @@ def entry_create_page(request: HttpRequest, author_id: UUID) -> HttpResponse:
                 visibility=entry.visibility,
                 entry=entry,
             )
+
+            # If this is an image entry, clear stored text fields and rely on
+            # HostedImage for rendering/federation. The form disables these
+            # inputs for image entries.
+            if (
+                entry.content_type == Entry.CONTENT_IMAGE_LEGACY
+                or entry.content_type in Entry.IMAGE_BASE64_CONTENT_TYPES
+                or (isinstance(entry.content_type, str) and entry.content_type.startswith("image/"))
+            ):
+                hosted = entry.hosted_images.first()
+                if hosted is None:
+                    return HttpResponseBadRequest("Image entries require at least one image.")
+                guessed = mimetypes.guess_type(hosted.file.name)[0] or ""
+                entry.content_type = {
+                    "image/png": Entry.CONTENT_IMAGE_PNG_BASE64,
+                    "image/jpeg": Entry.CONTENT_IMAGE_JPEG_BASE64,
+                    "image/gif": Entry.CONTENT_IMAGE_GIF_BASE64,
+                    "image/webp": Entry.CONTENT_IMAGE_WEBP_BASE64,
+                }.get(guessed, Entry.CONTENT_APPLICATION_BASE64)
+                entry.description = ""
+                entry.content = ""
+                entry.save(update_fields=["content_type", "description", "content"])
             entry.save(update_fields=["updated_at"])
 
             # Fan out to remote followers / friends
@@ -866,6 +889,25 @@ def entry_edit_page(
                 visibility=entry.visibility,
                 entry=entry,
             )
+
+            if (
+                entry.content_type == Entry.CONTENT_IMAGE_LEGACY
+                or entry.content_type in Entry.IMAGE_BASE64_CONTENT_TYPES
+                or (isinstance(entry.content_type, str) and entry.content_type.startswith("image/"))
+            ):
+                hosted = entry.hosted_images.first()
+                if hosted is None:
+                    return HttpResponseBadRequest("Image entries require at least one image.")
+                guessed = mimetypes.guess_type(hosted.file.name)[0] or ""
+                entry.content_type = {
+                    "image/png": Entry.CONTENT_IMAGE_PNG_BASE64,
+                    "image/jpeg": Entry.CONTENT_IMAGE_JPEG_BASE64,
+                    "image/gif": Entry.CONTENT_IMAGE_GIF_BASE64,
+                    "image/webp": Entry.CONTENT_IMAGE_WEBP_BASE64,
+                }.get(guessed, Entry.CONTENT_APPLICATION_BASE64)
+                entry.description = ""
+                entry.content = ""
+                entry.save(update_fields=["content_type", "description", "content"])
             entry.save(update_fields=["updated_at"])
             distribute_entry_to_remote_followers(entry)
             return redirect("entries:entry-detail", author_id=author.uuid, entry_id=entry.uuid)
@@ -985,6 +1027,111 @@ def serve_hosted_image(request: HttpRequest, image_id: UUID) -> HttpResponse:
     )
     response["Content-Type"] = content_type
     return response
+
+
+def _entry_content_type_is_image(content_type: str | None) -> bool:
+    if not content_type:
+        return False
+    return (
+        content_type == Entry.CONTENT_IMAGE_LEGACY
+        or content_type in Entry.IMAGE_BASE64_CONTENT_TYPES
+        or content_type.startswith("image/")
+        or content_type == Entry.CONTENT_APPLICATION_BASE64
+    )
+
+
+def _materialize_base64_image_entry(entry: Entry, uploaded_by: Author) -> None:
+    """
+    Decode `entry.content` (base64) into HostedImage and clear stored text fields.
+    Used by local API create/update when the client sends base64 image entries.
+    """
+    if not entry.content:
+        return
+
+    if not _entry_content_type_is_image(entry.content_type):
+        return
+
+    content_type = entry.content_type
+    _content_type_to_ext = {
+        Entry.CONTENT_IMAGE_PNG_BASE64: ".png",
+        Entry.CONTENT_IMAGE_JPEG_BASE64: ".jpg",
+        Entry.CONTENT_IMAGE_GIF_BASE64: ".gif",
+        Entry.CONTENT_IMAGE_WEBP_BASE64: ".webp",
+        Entry.CONTENT_APPLICATION_BASE64: ".png",  # best-effort fallback
+        Entry.CONTENT_IMAGE_LEGACY: ".png",
+    }
+    ext = _content_type_to_ext.get(content_type) or ".png"
+    filename = f"entry_{entry.uuid.hex}{ext}"
+
+    try:
+        image_data = base64.b64decode(entry.content)
+    except Exception as exc:
+        raise ValueError(f"Invalid base64 image content: {exc}") from exc
+
+    entry.hosted_images.all().delete()
+    HostedImage.objects.create(
+        uploaded_by=uploaded_by,
+        file=ContentFile(image_data, name=filename),
+        visibility=entry.visibility,
+        entry=entry,
+    )
+
+    # Image entries have no stored text payload after decoding.
+    entry.content = ""
+    entry.description = ""
+    entry.save(update_fields=["content", "description"])
+
+
+@csrf_exempt
+@require_http_methods(["GET"])
+def entry_image_api_by_entry_id(
+    request: HttpRequest, author_id: UUID, entry_id: UUID
+) -> HttpResponse:
+    """
+    GET an image entry converted to binary as an image.
+    Returns 404 if the entry is not an image.
+    """
+    author = get_object_or_404(Author, pk=author_id, is_deleted=False)
+    entry = get_object_or_404(Entry, pk=entry_id, author=author, is_deleted=False)
+
+    if not _entry_content_type_is_image(entry.content_type):
+        return HttpResponse(status=404)
+
+    viewer = _get_current_author(request)
+    if not _can_view_entry_detail(request, entry, viewer):
+        return HttpResponseForbidden("You do not have permission to view this image.")
+
+    hosted = entry.hosted_images.first()
+    if hosted is None:
+        return HttpResponse(status=404)
+
+    return serve_hosted_image(request, hosted.uuid)
+
+
+@csrf_exempt
+@require_http_methods(["GET"])
+def entry_image_api_by_fqid(request: HttpRequest, entry_fqid: str) -> HttpResponse:
+    """
+    FQID shortcut for image entry binary fetch.
+    Returns 404 if the entry is not an image.
+    """
+    from urllib.parse import unquote
+
+    decoded_fqid = unquote((entry_fqid or "").strip())
+    entry = get_object_or_404(Entry, fqid=decoded_fqid, is_deleted=False)
+
+    if not _entry_content_type_is_image(entry.content_type):
+        return HttpResponse(status=404)
+
+    viewer = _get_current_author(request)
+    if not _can_view_entry_detail(request, entry, viewer):
+        return HttpResponseForbidden("You do not have permission to view this image.")
+
+    hosted = entry.hosted_images.first()
+    if hosted is None:
+        return HttpResponse(status=404)
+
+    return serve_hosted_image(request, hosted.uuid)
 
 @require_http_methods(["GET", "POST"])
 def image_upload_page(request: HttpRequest, author_id: UUID) -> HttpResponse:
@@ -1175,6 +1322,12 @@ def author_entries_api(request: HttpRequest, author_id: UUID) -> HttpResponse:
         visibility=visibility,
     )
 
+    if _entry_content_type_is_image(content_type):
+        try:
+            _materialize_base64_image_entry(entry, uploaded_by=author)
+        except ValueError as exc:
+            return HttpResponseBadRequest(str(exc))
+
     # Fan out to remote followers / friends
     distribute_entry_to_remote_followers(entry)
 
@@ -1230,6 +1383,13 @@ def entry_detail_api(
         entry.content_type = content_type
         entry.visibility = visibility
         entry.save()
+
+        if _entry_content_type_is_image(content_type) and visibility != Entry.VISIBILITY_DELETED:
+            try:
+                _materialize_base64_image_entry(entry, uploaded_by=entry.author)
+            except ValueError as exc:
+                return HttpResponseBadRequest(str(exc))
+
         distribute_entry_to_remote_followers(entry)
         return JsonResponse(_entry_to_json(request, entry))
 

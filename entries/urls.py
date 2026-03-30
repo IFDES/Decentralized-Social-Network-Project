@@ -102,9 +102,19 @@ urlpatterns = [
         name="author-entries-api",
     ),
     path(
+        "api/authors/<uuid:author_id>/entries/<uuid:entry_id>/image",
+        views.entry_image_api_by_entry_id,
+        name="entry-image-api",
+    ),
+    path(
         "api/authors/<uuid:author_id>/entries/<uuid:entry_id>",
         views.entry_detail_api,
         name="entry-detail-api",
+    ),
+    path(
+        "api/entries/<path:entry_fqid>/image",
+        views.entry_image_api_by_fqid,
+        name="entry-image-fqid-api",
     ),
     path(
         "api/authors/<uuid:author_id>/entries/<uuid:entry_id>/comments",

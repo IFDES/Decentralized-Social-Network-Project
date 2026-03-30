@@ -1,7 +1,11 @@
 from datetime import datetime, timezone
+import base64
+import uuid as uuid_mod
+
+from django.core.files.base import ContentFile
 
 from authors.models import Author
-from .models import Entry
+from .models import Entry, HostedImage
 from authors.services import normalize_author_fqid
 
 
@@ -69,16 +73,56 @@ def handle_remote_entry_payload(payload: dict):
         raise ValueError("Entry payload is missing 'id' (FQID).")
 
     title = payload.get("title", "")
-    description = payload.get("description", "")
-    content = payload.get("content", "")
+    description = payload.get("description", "") or ""
+    content = payload.get("content", "") or ""
     content_type = payload.get("contentType", Entry.CONTENT_TEXT_PLAIN)
     visibility = payload.get("visibility", Entry.VISIBILITY_PUBLIC)
     web = payload.get("web", "")
 
     is_deleted = visibility == Entry.VISIBILITY_DELETED
 
-    if not content and not is_deleted:
+    is_base64_image = (
+        content_type in Entry.IMAGE_BASE64_CONTENT_TYPES
+        or content_type == Entry.CONTENT_IMAGE_LEGACY
+        or (isinstance(content_type, str) and content_type.startswith("image/"))
+    )
+
+    # Image entries don't need stored textual description content.
+    if is_base64_image:
+        description = ""
+
+    if is_base64_image and not is_deleted and not content:
+        raise ValueError("Image entry payload is missing base64 'content'.")
+    if not is_deleted and not content and not is_base64_image:
         raise ValueError("Entry payload is missing 'content'.")
+
+    content_to_store = "" if is_base64_image else content
+
+    _content_type_to_ext = {
+        Entry.CONTENT_IMAGE_PNG_BASE64: ".png",
+        Entry.CONTENT_IMAGE_JPEG_BASE64: ".jpg",
+        Entry.CONTENT_IMAGE_GIF_BASE64: ".gif",
+        Entry.CONTENT_IMAGE_WEBP_BASE64: ".webp",
+        Entry.CONTENT_APPLICATION_BASE64: ".png",  # best-effort fallback
+    }
+
+    def _decode_and_store_hosted_image(entry: Entry) -> None:
+        try:
+            image_data = base64.b64decode(content)
+        except Exception as exc:
+            raise ValueError(f"Failed to decode base64 image content: {exc}") from exc
+
+        ext = _content_type_to_ext.get(content_type) or ".png"
+        filename = f"remote_{uuid_mod.uuid4().hex}{ext}"
+
+        # Idempotent: replace hosted image(s) for this entry.
+        entry.hosted_images.all().delete()
+        HostedImage.objects.create(
+            uploaded_by=remote_author,
+            file=ContentFile(image_data, name=filename),
+            visibility=visibility,
+            entry=entry,
+        )
 
     entry, created = Entry.objects.get_or_create(
         fqid=entry_fqid,
@@ -86,7 +130,7 @@ def handle_remote_entry_payload(payload: dict):
             "author": remote_author,
             "title": title,
             "description": description,
-            "content": content,
+            "content": content_to_store,
             "content_type": content_type,
             "visibility": visibility,
             "web": web,
@@ -107,8 +151,8 @@ def handle_remote_entry_payload(payload: dict):
         if entry.description != description:
             entry.description = description
             changed = True
-        if entry.content != content:
-            entry.content = content
+        if entry.content != content_to_store:
+            entry.content = content_to_store
             changed = True
         if entry.content_type != content_type:
             entry.content_type = content_type
@@ -132,5 +176,9 @@ def handle_remote_entry_payload(payload: dict):
 
         if changed:
             entry.save()
+
+    # Materialize base64 image entries into HostedImage (skips for deleted entries).
+    if is_base64_image and not is_deleted:
+        _decode_and_store_hosted_image(entry)
 
     return entry, created

@@ -69,9 +69,36 @@ class Entry(models.Model):
     CONTENT_TEXT_PLAIN = "text/plain"
     CONTENT_TEXT_MARKDOWN = "text/markdown"
 
+    # Federation/API content types for base64-encoded image entries.
+    # For these, `Entry.content` may be empty on storage nodes, but when
+    # distributing federated `entry` payloads we will (re)encode from the
+    # HostedImage file so remote nodes can decode and ingest.
+    CONTENT_IMAGE_PNG_BASE64 = "image/png;base64"
+    CONTENT_IMAGE_JPEG_BASE64 = "image/jpeg;base64"
+    CONTENT_IMAGE_GIF_BASE64 = "image/gif;base64"
+    CONTENT_IMAGE_WEBP_BASE64 = "image/webp;base64"
+    CONTENT_APPLICATION_BASE64 = "application/base64"
+
+    IMAGE_BASE64_CONTENT_TYPES = {
+        CONTENT_IMAGE_PNG_BASE64,
+        CONTENT_IMAGE_JPEG_BASE64,
+        CONTENT_IMAGE_GIF_BASE64,
+        CONTENT_IMAGE_WEBP_BASE64,
+        CONTENT_APPLICATION_BASE64,
+    }
+
+    # Legacy DB value supported by older migrations/UI.
+    CONTENT_IMAGE_LEGACY = "image"
+
     CONTENT_TYPE_CHOICES = [
         (CONTENT_TEXT_PLAIN, "Plain text"),
         (CONTENT_TEXT_MARKDOWN, "CommonMark"),
+        (CONTENT_IMAGE_PNG_BASE64, "PNG (base64)"),
+        (CONTENT_IMAGE_JPEG_BASE64, "JPEG (base64)"),
+        (CONTENT_IMAGE_GIF_BASE64, "GIF (base64)"),
+        (CONTENT_IMAGE_WEBP_BASE64, "WebP (base64)"),
+        (CONTENT_APPLICATION_BASE64, "Image (base64; unknown type)"),
+        (CONTENT_IMAGE_LEGACY, "Image (legacy)"),
     ]
 
     uuid = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -102,7 +129,9 @@ class Entry(models.Model):
         choices=CONTENT_TYPE_CHOICES,
         default=CONTENT_TEXT_PLAIN,
     )
-    content = models.TextField()
+    # For image entries (content_type in image/*;base64), the storage node
+    # may keep `content` empty after decoding base64 into HostedImage.
+    content = models.TextField(blank=True, default="")
 
     visibility = models.CharField(
         max_length=16,
