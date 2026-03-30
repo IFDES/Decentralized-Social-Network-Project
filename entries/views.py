@@ -1087,7 +1087,7 @@ def author_entries_api(request: HttpRequest, author_id: UUID) -> HttpResponse:
         viewer = _get_current_author(request)
 
         remote_allowed = _remote_node_allowed_visibilities(request, author)
-        if remote_allowed is not None and viewer is None:
+        if remote_allowed is not None:
             allowed_visibilities = remote_allowed
         else:
             allowed_visibilities = get_profile_entry_visibilities(viewer, author)
@@ -1221,10 +1221,11 @@ def _remote_node_allowed_visibilities(request: HttpRequest, author: Author) -> l
     For node-authenticated GET /api/authors/{author}/entries requests, determine
     which visibilities should be exposed to that remote node.
 
-    Since auth is at the node level, we allow:
-    - PUBLIC always
-    - UNLISTED if any remote author on that node is an approved follower of `author`
-    - FRIENDS if any remote author on that node is a mutual friend of `author`
+    Tightened rule:
+    - Do NOT expose PUBLIC to remote nodes by default.
+    - Expose PUBLIC/UNLISTED only if at least one remote author on that node has an
+      APPROVED follow relationship to this local author.
+    - Expose FRIENDS only if at least one remote author on that node is a mutual friend.
     """
     user = getattr(request, "user", None)
     if not user or not getattr(user, "is_authenticated", False):
@@ -1240,16 +1241,19 @@ def _remote_node_allowed_visibilities(request: HttpRequest, author: Author) -> l
         fqid__startswith=remote_node.base_url.rstrip("/"),
     )
 
-    allowed = [Entry.VISIBILITY_PUBLIC]
+    allowed = []
 
-    has_follower = FollowRelationship.objects.filter(
+    has_approved_follower = FollowRelationship.objects.filter(
         follower__in=remote_authors,
         followee=author,
         status=FollowRelationship.Status.APPROVED,
     ).exists()
 
-    if has_follower:
-        allowed.append(Entry.VISIBILITY_UNLISTED)
+    if has_approved_follower:
+        allowed.extend([
+            Entry.VISIBILITY_PUBLIC,
+            Entry.VISIBILITY_UNLISTED,
+        ])
 
     has_friend = FollowRelationship.objects.filter(
         follower__in=remote_authors,

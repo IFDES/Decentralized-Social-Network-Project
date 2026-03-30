@@ -518,6 +518,15 @@ def author_inbox(request, author_serial):
 
     if payload_type == "entry":
         try:
+            if not _remote_entry_allowed_for_recipient(local_author, payload):
+                return JsonResponse(
+                    {
+                        "type": "error",
+                        "detail": "Remote entry is not allowed for this inbox recipient.",
+                    },
+                    status=403,
+                )
+
             entry, created = handle_remote_entry_payload(payload)
         except ValueError as exc:
             return JsonResponse(
@@ -608,3 +617,39 @@ def author_inbox(request, author_serial):
         {"type": "error", "detail": f"Unsupported inbox payload type: {payload_type}"},
         status=400,
     )
+
+def _remote_entry_allowed_for_recipient(local_author: Author, payload: dict) -> bool:
+    """
+    Decide whether a remote entry payload is allowed to be delivered into
+    local_author's inbox.
+
+    Rule:
+    - PUBLIC and UNLISTED: allowed only if local_author follows the remote author
+      with APPROVED status.
+    - FRIENDS: allowed only if local_author and remote author are mutual approved friends.
+    - DELETED: allow if there was previously an approved follow/friend relationship,
+      so deletes can still clean up previously received content.
+    """
+    author_data = payload.get("author")
+    if not isinstance(author_data, dict):
+        return False
+
+    remote_author = upsert_remote_author(author_data)
+    visibility = (payload.get("visibility") or Entry.VISIBILITY_PUBLIC).upper()
+
+    approved_follow = FollowRelationship.objects.filter(
+        follower=local_author,
+        followee=remote_author,
+        status=FollowRelationship.Status.APPROVED,
+    ).exists()
+
+    if visibility in (Entry.VISIBILITY_PUBLIC, Entry.VISIBILITY_UNLISTED):
+        return approved_follow
+
+    if visibility == Entry.VISIBILITY_FRIENDS:
+        return FollowRelationship.are_friends(local_author, remote_author)
+
+    if visibility == Entry.VISIBILITY_DELETED:
+        return approved_follow or FollowRelationship.are_friends(local_author, remote_author)
+
+    return False
