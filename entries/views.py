@@ -338,35 +338,52 @@ def _can_view_entry(entry: Entry, viewer: Author | None) -> bool:
 def get_profile_entry_visibilities(viewer, author) -> list:
     if not author:
         return [Entry.VISIBILITY_PUBLIC]
+
     if viewer and viewer.uuid == author.uuid:
         return [
             Entry.VISIBILITY_PUBLIC,
             Entry.VISIBILITY_FRIENDS,
             Entry.VISIBILITY_UNLISTED,
         ]
+
     if viewer and FollowRelationship.are_friends(viewer, author):
         return [
             Entry.VISIBILITY_PUBLIC,
             Entry.VISIBILITY_FRIENDS,
             Entry.VISIBILITY_UNLISTED,
         ]
-    if viewer and FollowRelationship.objects.filter(
-        follower=viewer,
-        followee=author,
-        status=FollowRelationship.Status.APPROVED,
-    ).exists():
+
+    approved_follow = (
+        viewer
+        and FollowRelationship.objects.filter(
+            follower=viewer,
+            followee=author,
+            status=FollowRelationship.Status.APPROVED,
+        ).exists()
+    )
+
+    if author.is_local:
+        if approved_follow:
+            return [Entry.VISIBILITY_PUBLIC, Entry.VISIBILITY_UNLISTED]
+        return [Entry.VISIBILITY_PUBLIC]
+
+    # remote author: public and unlisted are both follower-gated
+    if approved_follow:
         return [Entry.VISIBILITY_PUBLIC, Entry.VISIBILITY_UNLISTED]
-    return [Entry.VISIBILITY_PUBLIC]
+
+    return []
 
 
 def _stream_entries_queryset(request: HttpRequest | None = None):
     """
     Canonical stream queryset:
-    - anonymous: PUBLIC only
+    - anonymous:
+        * local PUBLIC only
     - authenticated:
-        PUBLIC from everyone
-        UNLISTED from approved followees
-        FRIENDS from mutual approved follows
+        * local PUBLIC from local authors
+        * remote PUBLIC/UNLISTED only from APPROVED followees
+        * local UNLISTED only from APPROVED followees
+        * FRIENDS only from mutual APPROVED follows
     - never show deleted entries/authors
     """
     base = (
@@ -382,7 +399,8 @@ def _stream_entries_queryset(request: HttpRequest | None = None):
     viewer = _get_current_author(request) if request else None
     if not viewer:
         return base.filter(
-            visibility=Entry.VISIBILITY_PUBLIC
+            visibility=Entry.VISIBILITY_PUBLIC,
+            author__is_local=True,
         ).order_by("-updated_at", "-published", "-uuid")
 
     friend_ids = set(
@@ -397,28 +415,39 @@ def _stream_entries_queryset(request: HttpRequest | None = None):
     )
 
     return base.filter(
-        Q(visibility=Entry.VISIBILITY_PUBLIC)
-        | (
-            Q(visibility=Entry.VISIBILITY_UNLISTED)
-            & Q(author_id__in=following_ids)
+        # local public stays public
+        (
+            Q(author__is_local=True) &
+            Q(visibility=Entry.VISIBILITY_PUBLIC)
         )
-        | (
-            Q(visibility=Entry.VISIBILITY_FRIENDS)
-            & Q(author_id__in=friend_ids)
+        |
+        # local unlisted only if approved follow
+        (
+            Q(author__is_local=True) &
+            Q(visibility=Entry.VISIBILITY_UNLISTED) &
+            Q(author_id__in=following_ids)
+        )
+        |
+        # remote public behaves like unlisted: approved follow required
+        (
+            Q(author__is_local=False) &
+            Q(visibility=Entry.VISIBILITY_PUBLIC) &
+            Q(author_id__in=following_ids)
+        )
+        |
+        # remote unlisted also requires approved follow
+        (
+            Q(author__is_local=False) &
+            Q(visibility=Entry.VISIBILITY_UNLISTED) &
+            Q(author_id__in=following_ids)
+        )
+        |
+        # friends-only still requires mutual approved follow
+        (
+            Q(visibility=Entry.VISIBILITY_FRIENDS) &
+            Q(author_id__in=friend_ids)
         )
     ).order_by("-updated_at", "-published", "-uuid")
-
-    # return base.filter(
-    #     Q(visibility=Entry.VISIBILITY_PUBLIC)
-    #     | (
-    #         Q(visibility=Entry.VISIBILITY_UNLISTED)
-    #         & Q(author_id__in=following_ids)
-    #     )
-    #     | (
-    #         Q(visibility=Entry.VISIBILITY_FRIENDS)
-    #         & Q(author_id__in=friend_ids)
-    #     )
-    # ).order_by("-updated_at", "-published", "-uuid")
 
 
 # ---------------------------------------------------------------------------
