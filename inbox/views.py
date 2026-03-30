@@ -273,10 +273,9 @@ def _handle_entry_payload(local_author: Author, payload: dict):
     if not content:
         raise ValueError("Entry payload is missing 'content'.")
 
-    # Detect base64 image payloads — store the image locally and normalize
-    # the entry's content_type to "image" for local rendering.
+    # Detect base64 image payloads — store the image locally as a HostedImage.
     is_base64_image = content_type in _BASE64_IMAGE_CONTENT_TYPES
-    stored_content_type = Entry.CONTENT_IMAGE if is_base64_image else content_type
+    stored_content_type = Entry.CONTENT_TEXT_PLAIN if is_base64_image else content_type
 
     # Use fqid for deduplication — if we already have this entry, update it
     try:
