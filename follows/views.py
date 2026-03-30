@@ -102,7 +102,7 @@ def follow_ui_page(request: HttpRequest) -> HttpResponse:
         .order_by("display_name")
     )
 
-    if not local_authors.is_empty():
+    if local_authors:
         for x in reversed(range(len(local_authors))):
             authorObj = AuthorAccount.objects.get(author=local_authors[x])
             user = authorObj.user
