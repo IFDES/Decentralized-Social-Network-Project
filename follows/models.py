@@ -1,50 +1,34 @@
 from django.db import models
-from authors.models import Author  # local import avoids circulars sometimes
 from django.db.models import Exists, OuterRef
+
+from authors.models import Author
+
 
 class FollowRelationship(models.Model):
     """
-    Stores one directed "follow" relationship from follower -> followee
+    Stores one directed follow relationship: follower -> followee.
 
-    # The current state of the relationship:
-    #   - PENDING: request exists but not approved yet
-    #   - APPROVED: follow is active
-    #   - DENIED: request was rejected
+    Internal statuses:
+      - PENDING: follow request exists but has not been accepted yet
+      - APPROVED: follow is active
+      - DENIED: follow request was rejected
 
-    # Example:
-    #   1. When A follows B, we create (A -> B) with status=PENDING
-    #   2a. If B approves, we set status=APPROVED
-    #   2b. If B denies, we set status=DENIED (or delete depending on project rules).
-    #   3. Streams can check approved relationships to decide which unlisted/friends posts to show.
+    Notes:
+      - External API payloads do not need to expose this internal status.
+      - A follow request from A to B is stored as (A -> B).
+      - If B accepts, that same row becomes APPROVED.
     """
 
     class Status(models.TextChoices):
-        # Follow requests start as PENDING, then become APPROVED or DENIED external
-        PENDING = "PENDING"
-        APPROVED = "APPROVED"
-        DENIED = "DENIED"
-
-    # API spec language (external) to internal because the assignment requires "state should be requesting, accepted or rejected"
-    STATUS_TO_STATE = {
-        Status.PENDING: "requesting",
-        Status.APPROVED: "accepted",
-        Status.DENIED: "rejected",
-    }
-
-    # Reverse key and values to process internally
-    # For example:
-    # The API uses 'requesting' so thats what we get, the db stores PENDING so if we change the words in the future, it still has the same semantics; we then process in the server maybe to APPROVED and return 'accepted'
-
-    STATE_TO_STATUS = {}
-    for status, state in STATUS_TO_STATE.items():
-        STATE_TO_STATUS[state] = status
+        PENDING = "PENDING", "Pending"
+        APPROVED = "APPROVED", "Approved"
+        DENIED = "DENIED", "Denied"
 
     follower = models.ForeignKey(
         "authors.Author",
         on_delete=models.CASCADE,
         related_name="following_rels",
     )
-
     followee = models.ForeignKey(
         "authors.Author",
         on_delete=models.CASCADE,
@@ -54,24 +38,17 @@ class FollowRelationship(models.Model):
     status = models.CharField(
         max_length=16,
         choices=Status.choices,
-        default=Status.PENDING, # if no value then assume pending
+        default=Status.PENDING,
     )
-    
-    # Set once upon creation
-    created_at = models.DateTimeField(auto_now_add=True)
 
-    # Updated upon every save
+    created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
-    @staticmethod # Because it's a general helper that does not need one specfic FollowRelationship instance, therefore we don't need self
+    @staticmethod
     def friends_of(author):
         """
-        Returns a queryset of Author objects that are friends with `author`
-        (mutual APPROVED follows).
+        Returns Author objects that are mutual APPROVED follows with `author`.
         """
-        # Example:
-        # (author -> X) APPROVED exists AND (X -> author) APPROVED exists
-
         outgoing_approved = FollowRelationship.objects.filter(
             follower=author,
             followee=OuterRef("pk"),
@@ -84,7 +61,12 @@ class FollowRelationship(models.Model):
             status=FollowRelationship.Status.APPROVED,
         )
 
-        return Author.objects.filter(is_deleted=False).annotate(
+        queryset = Author.objects.all()
+
+        if hasattr(Author, "is_deleted"):
+            queryset = queryset.filter(is_deleted=False)
+
+        return queryset.annotate(
             has_outgoing=Exists(outgoing_approved),
             has_incoming=Exists(incoming_approved),
         ).filter(
@@ -95,40 +77,29 @@ class FollowRelationship(models.Model):
     @staticmethod
     def are_friends(a, b) -> bool:
         """
-        True only if both directions are APPROVED and neither author is deleted.
+        True only if both directions are APPROVED.
         """
         if not a or not b:
             return False
 
-        if getattr(a, "is_deleted", False) or getattr(b, "is_deleted", False):
+        if hasattr(a, "is_deleted") and a.is_deleted:
             return False
-
-        if a.pk == b.pk:
-            return True  # treat self as friend for visibility for now
+        if hasattr(b, "is_deleted") and b.is_deleted:
+            return False
 
         return (
             FollowRelationship.objects.filter(
-                follower=a, followee=b, status=FollowRelationship.Status.APPROVED
+                follower=a,
+                followee=b,
+                status=FollowRelationship.Status.APPROVED,
             ).exists()
-            and
-            FollowRelationship.objects.filter(
-                follower=b, followee=a, status=FollowRelationship.Status.APPROVED
+            and FollowRelationship.objects.filter(
+                follower=b,
+                followee=a,
+                status=FollowRelationship.Status.APPROVED,
             ).exists()
         )
 
-    # Called in follow_to_json in views.py 
-    @property # Turns a method into an attribute-like value
-    def state(self) -> str:
-        # Spec expects: requesting, accepted, rejected
-        return self.STATUS_TO_STATE.get(self.status, "requesting")
-
-    def set_state(self, state: str) -> None:
-        # If "state" is accepted from request JSON
-        if state not in self.STATE_TO_STATUS:
-            raise ValueError(f"Invalid follow state: {state}")
-        self.status = self.STATE_TO_STATUS[state]
-
-    # Meta is the settings for the table. This enforces the db that there is at most one row for a given (follower, followee) pair, preventing duplicates like two pending requests and avoids confusing stream/approval logic
     class Meta:
         constraints = [
             models.UniqueConstraint(
@@ -136,3 +107,6 @@ class FollowRelationship(models.Model):
                 name="unique_follow_pair",
             )
         ]
+
+    def __str__(self):
+        return f"{self.follower} -> {self.followee} ({self.status})"

@@ -1,34 +1,53 @@
 from django.conf import settings
+from urllib.parse import urlparse
+
+
+def _base_url() -> str:
+    return settings.SERVICE_BASE_URL.rstrip("/")
 
 
 def build_author_id(author) -> str:
     """
-    Build the FQID (fully qualified ID) for an author object.
-
-    Uses SERVICE_BASE_URL from settings so the ID is a full URL like:
-      {BASE_URL}/api/authors/{AUTHOR_SERIAL}
+    Build the canonical API URL for an author.
     """
     fqid = getattr(author, "fqid", None)
     if fqid:
-        return fqid
-
-    base = settings.SERVICE_BASE_URL
-    return f"{base}/api/authors/{author.uuid}"
+        return fqid.rstrip("/")
+    return f"{_base_url()}/api/authors/{author.uuid}"
 
 
-def build_author_host() -> str:
+def build_author_host(author=None) -> str:
     """
-    Build the 'host' field for an Author JSON object.
+    Build the spec-style 'host' field for an author JSON object.
+    Expected style: https://node.example.com/api/
     """
-    return f"{settings.SERVICE_BASE_URL}/api/"
+    if author is not None:
+        host = getattr(author, "host", None)
+        if host:
+            host = host.rstrip("/")
+            if host.endswith("/api"):
+                return f"{host}/"
+            parsed = urlparse(host)
+            if parsed.scheme and parsed.netloc:
+                return f"{parsed.scheme}://{parsed.netloc}/api/"
+
+        fqid = getattr(author, "fqid", None)
+        if fqid:
+            parsed = urlparse(fqid)
+            if parsed.scheme and parsed.netloc:
+                return f"{parsed.scheme}://{parsed.netloc}/api/"
+
+    return f"{_base_url()}/api/"
 
 
 def build_author_web(author) -> str:
     """
     Build HTML profile page URL for an author.
     """
-    base = settings.SERVICE_BASE_URL
-    return f"{base}/authors/{author.uuid}"
+    web = getattr(author, "web", None)
+    if web:
+        return web.rstrip("/")
+    return f"{_base_url()}/authors/{author.uuid}"
 
 
 def author_to_json(author) -> dict:
@@ -44,7 +63,6 @@ def author_to_json(author) -> dict:
         "github": "http://github.com/gjohnson",
         "profileImage": "https://i.imgur.com/k7XVwpB.jpeg",
         "web": "http://nodeaaaa/authors/greg",
-        "description": "Optional bio/description text"
     }
     """
     fqid = author.fqid or build_author_id(author)
@@ -59,7 +77,6 @@ def author_to_json(author) -> dict:
         "displayName": author.display_name or "",
         "github": author.github or "",
         "profileImage": author.profile_image or "",
-        "description": author.description or "",
     }
 
 # Add other serializers here later.
