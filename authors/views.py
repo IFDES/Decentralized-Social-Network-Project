@@ -210,7 +210,7 @@ def authors_api(request: HttpRequest):
     )
 
     base = request.build_absolute_uri("/").rstrip("/")
-    author.host = base
+    author.host = f"{base}/api"
     author.fqid = f"{base}/api/authors/{author.uuid}"
     author.web = f"{base}/authors/{author.uuid}"
     author.save(update_fields=["host", "fqid", "web"])
@@ -353,7 +353,7 @@ def signup_page(request: HttpRequest):
                 is_local=True,
             )
 
-            author.host = base
+            author.host = f"{base}/api"
             author.fqid = f"{base}/api/authors/{author.uuid}"
             author.web = f"{base}/authors/{author.uuid}"
             author.save(update_fields=["host", "fqid", "web"])
