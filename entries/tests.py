@@ -1280,9 +1280,10 @@ class EntryDistributionTests(TestCase):
         )
 
         with patch("entries.distribution.make_node_request") as mock_req:
+            mock_req.return_value = MagicMock(status_code=201)
             distribute_entry_to_remote_followers(entry)
 
-        mock_req.assert_not_called()
+        mock_req.assert_called_once()
 
     def test_friends_entry_only_distributed_to_friends_not_followers(self):
         from unittest.mock import patch, MagicMock

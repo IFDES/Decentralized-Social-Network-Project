@@ -131,7 +131,7 @@ def distribute_entry_to_remote_followers(entry: Entry) -> None:
     """
     author = entry.author
 
-    if entry.visibility == Entry.VISIBILITY_PUBLIC:
+    if entry.visibility in (Entry.VISIBILITY_PUBLIC, Entry.VISIBILITY_UNLISTED):
         # All remote authors with APPROVED follow on this author
         remote_followers = (
             FollowRelationship.objects.filter(
@@ -164,8 +164,6 @@ def distribute_entry_to_remote_followers(entry: Entry) -> None:
             is_deleted=False,
         )
     else:
-        # UNLISTED is not pushed on entry create/update; recipients can retrieve
-        # it via direct link or follow-sync mechanisms.
         return
 
     payload = _entry_to_inbox_json(entry)
