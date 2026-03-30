@@ -1,5 +1,6 @@
 import json
 import mimetypes
+import re
 from datetime import datetime, timezone
 from uuid import UUID
 
@@ -132,10 +133,34 @@ def _build_image_urls_from_request(
     text = (request.POST.get("image_urls_text") or "").strip()
     for part in text.replace(",", "\n").splitlines():
         part = part.strip()
-        if part and (part.startswith("http://") or part.startswith("https://")):
-            # For external URLs, we don't create HostedImage; clients can embed
-            # them directly in markdown content.
+        if not part:
             continue
+        m = re.search(r"/api/media/images/([0-9a-fA-F-]{36})/?$", part)
+        if m:
+            try:
+                hosted = HostedImage.objects.get(pk=m.group(1))
+                if hosted.entry_id != (entry.pk if entry else None):
+                    hosted.entry = entry
+                    hosted.save(update_fields=["entry"])
+            except HostedImage.DoesNotExist:
+                pass
+
+
+def _reconcile_hosted_images(request: HttpRequest, entry: Entry) -> None:
+    """Unlink HostedImage objects whose URLs were removed from the textarea."""
+    submitted_urls: set[str] = set()
+    text = (request.POST.get("image_urls_text") or "").strip()
+    for line in text.replace(",", "\n").splitlines():
+        line = line.strip()
+        if line:
+            submitted_urls.add(line)
+
+    for hosted in entry.hosted_images.all():
+        url = _hosted_image_canonical_url(request, hosted)
+        if url not in submitted_urls:
+            hosted.entry = None
+            hosted.save(update_fields=["entry"])
+
 
 def _should_ingest_remote_entry_for_viewer(entry_payload: dict, remote_author: Author, viewer: Author | None) -> bool:
     visibility = (entry_payload.get("visibility") or Entry.VISIBILITY_PUBLIC).upper()
@@ -804,8 +829,9 @@ def entry_edit_page(
         form = EntryForm(request.POST, request.FILES, instance=entry)
         if form.is_valid():
             entry = form.save(commit=False)
-            entry.save() # Redundant?
+            entry.save()
 
+            _reconcile_hosted_images(request, entry)
             _build_image_urls_from_request(
                 request,
                 author,
@@ -1060,7 +1086,12 @@ def author_entries_api(request: HttpRequest, author_id: UUID) -> HttpResponse:
 
     if request.method == "GET":
         viewer = _get_current_author(request)
-        allowed_visibilities = get_profile_entry_visibilities(viewer, author)
+
+        remote_allowed = _remote_node_allowed_visibilities(request, author)
+        if remote_allowed is not None and viewer is None:
+            allowed_visibilities = remote_allowed
+        else:
+            allowed_visibilities = get_profile_entry_visibilities(viewer, author)
 
         queryset = (
             Entry.objects.filter(
@@ -1180,3 +1211,55 @@ def entry_detail_api(
     entry.save()
     distribute_entry_to_remote_followers(entry)
     return HttpResponse(status=204)
+
+
+def _remote_node_allowed_visibilities(request: HttpRequest, author: Author) -> list[str] | None:
+    """
+    For node-authenticated GET /api/authors/{author}/entries requests, determine
+    which visibilities should be exposed to that remote node.
+
+    Since auth is at the node level, we allow:
+    - PUBLIC always
+    - UNLISTED if any remote author on that node is an approved follower of `author`
+    - FRIENDS if any remote author on that node is a mutual friend of `author`
+    """
+    user = getattr(request, "user", None)
+    if not user or not getattr(user, "is_authenticated", False):
+        return None
+
+    remote_node = getattr(user, "remote_node", None)
+    if not remote_node or not getattr(remote_node, "is_active", False):
+        return None
+
+    remote_authors = Author.objects.filter(
+        is_local=False,
+        is_deleted=False,
+        fqid__startswith=remote_node.base_url.rstrip("/"),
+    )
+
+    allowed = [Entry.VISIBILITY_PUBLIC]
+
+    has_follower = FollowRelationship.objects.filter(
+        follower__in=remote_authors,
+        followee=author,
+        status=FollowRelationship.Status.APPROVED,
+    ).exists()
+
+    if has_follower:
+        allowed.append(Entry.VISIBILITY_UNLISTED)
+
+    has_friend = FollowRelationship.objects.filter(
+        follower__in=remote_authors,
+        followee=author,
+        status=FollowRelationship.Status.APPROVED,
+    ).filter(
+        followee__in=FollowRelationship.objects.filter(
+            follower=author,
+            status=FollowRelationship.Status.APPROVED,
+        ).values("followee")
+    ).exists()
+
+    if has_friend:
+        allowed.append(Entry.VISIBILITY_FRIENDS)
+
+    return allowed

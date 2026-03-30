@@ -1637,6 +1637,155 @@ Content-Type: application/json
 
 ---
 
+## Admin Author Management API
+
+These endpoints are for node administrators to add, modify, and soft-delete authors.
+
+### Authentication and Authorization
+
+- Caller must be authenticated as a local Django user session.
+- Caller must be an admin user (`is_staff=True` or `is_superuser=True`).
+- If not authenticated, endpoints return `401`.
+- If authenticated but not admin, endpoints return `403`.
+
+### POST /api/admin/authors
+
+- **Purpose**: Admin creates an author directly (optional linked local login account).
+- **Auth**: Publicly Accessible
+- **Body** (`application/json`):
+  - `displayName` (string, required)
+  - `github` (string, optional)
+  - `profileImage` (string, optional)
+  - `description` (string, optional)
+  - `id` or `fqid` (string URL, optional; defaults to local canonical ID)
+  - `host` (string URL, optional; defaults to local API host)
+  - `web` (string URL, optional; defaults to local profile URL)
+  - `isLocal` (boolean, optional, default `true`)
+  - `username` + `password` (optional pair; if provided creates linked `User` + `AuthorAccount`)
+  - `isActive` (boolean, optional; applies to created linked user)
+
+#### Example request
+
+```http
+POST /api/admin/authors
+Content-Type: application/json
+
+{
+  "displayName": "Node Managed Author",
+  "github": "https://github.com/nodeauthor",
+  "profileImage": "https://example.com/nodeauthor.png",
+  "description": "Created by node admin",
+  "username": "node_author",
+  "password": "StrongPass123!",
+  "isActive": true
+}
+```
+
+#### Example response
+
+```json
+{
+  "type": "admin_author_create",
+  "author": {
+    "type": "author",
+    "id": "http://127.0.0.1:8000/api/authors/7f3bd47b-0c72-4e81-9fd1-5c3a4f021c30",
+    "host": "http://127.0.0.1:8000/api/",
+    "displayName": "Node Managed Author",
+    "github": "https://github.com/nodeauthor",
+    "profileImage": "https://example.com/nodeauthor.png",
+    "web": "http://127.0.0.1:8000/authors/7f3bd47b-0c72-4e81-9fd1-5c3a4f021c30"
+  },
+  "linkedUser": "node_author"
+}
+```
+
+#### Status codes
+
+| Status | Meaning |
+|--------|---------|
+| `201 Created` | Author created |
+| `400 Bad Request` | Missing/invalid fields, duplicate username, or FQID conflict |
+| `401 Unauthorized` | Not logged in |
+| `403 Forbidden` | Not an admin user |
+
+---
+
+### PUT /api/admin/authors/{AUTHOR_SERIAL}
+
+- **Purpose**: Admin updates author fields (including soft-delete toggle).
+- **Auth**: Admin-only.
+- **Body** (`application/json`): any subset of
+  - `displayName`, `github`, `profileImage`, `description`, `host`, `web`, `id`/`fqid`, `isLocal`, `isDeleted`
+
+#### Example request
+
+```http
+PUT /api/admin/authors/7f3bd47b-0c72-4e81-9fd1-5c3a4f021c30
+Content-Type: application/json
+
+{
+  "displayName": "Node Managed Author (Updated)",
+  "github": "https://github.com/nodeauthor-updated",
+  "isDeleted": false
+}
+```
+
+#### Example response
+
+```json
+{
+  "type": "admin_author_update",
+  "author": {
+    "type": "author",
+    "id": "http://127.0.0.1:8000/api/authors/7f3bd47b-0c72-4e81-9fd1-5c3a4f021c30",
+    "host": "http://127.0.0.1:8000/api/",
+    "displayName": "Node Managed Author (Updated)",
+    "github": "https://github.com/nodeauthor-updated",
+    "profileImage": "https://example.com/nodeauthor.png",
+    "web": "http://127.0.0.1:8000/authors/7f3bd47b-0c72-4e81-9fd1-5c3a4f021c30"
+  }
+}
+```
+
+#### Status codes
+
+| Status | Meaning |
+|--------|---------|
+| `200 OK` | Author updated |
+| `400 Bad Request` | Invalid field values or FQID conflict |
+| `401 Unauthorized` | Not logged in |
+| `403 Forbidden` | Not an admin user |
+| `404 Not Found` | Author not found |
+
+---
+
+### DELETE /api/admin/authors/{AUTHOR_SERIAL}
+
+- **Purpose**: Admin soft-deletes an author.
+- **Auth**: Admin-only.
+- **Behavior**: sets `is_deleted=true` and `deleted_at` timestamp; does not remove the DB row.
+
+#### Example request
+
+```http
+DELETE /api/admin/authors/7f3bd47b-0c72-4e81-9fd1-5c3a4f021c30
+```
+
+#### Response
+
+- **Status**: `204 No Content` on success.
+
+#### Status codes
+
+| Status | Meaning |
+|--------|---------|
+| `204 No Content` | Author soft-deleted |
+| `401 Unauthorized` | Not logged in |
+| `403 Forbidden` | Not an admin user |
+| `404 Not Found` | Author not found |
+
+---
+
 ### GET /accounts/signup/
 
 - **Purpose**: Render the signup form for new users.

@@ -68,12 +68,10 @@ class Entry(models.Model):
 
     CONTENT_TEXT_PLAIN = "text/plain"
     CONTENT_TEXT_MARKDOWN = "text/markdown"
-    CONTENT_IMAGE = "image"
 
     CONTENT_TYPE_CHOICES = [
         (CONTENT_TEXT_PLAIN, "Plain text"),
         (CONTENT_TEXT_MARKDOWN, "CommonMark"),
-        (CONTENT_IMAGE, "Image"),
     ]
 
     uuid = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
