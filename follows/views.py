@@ -199,8 +199,19 @@ def follow_to_json(rel: FollowRelationship) -> dict:
     return {
         "type": "follow",
         "summary": f"{rel.follower.display_name} wants to follow {rel.followee.display_name}",
-        "state": "requesting",
-        "actor": author_to_json(rel.follower),
+        # @property on FollowRelationship (older code).
+        "state": getattr(rel, "state", None)
+        or (
+            FollowRelationship.STATUS_TO_STATE.get(rel.status)
+            if hasattr(FollowRelationship, "STATUS_TO_STATE")
+            else {
+                "PENDING": "requesting",
+                "APPROVED": "accepted",
+                "DENIED": "rejected",
+            }.get(getattr(rel, "status", None))
+        )
+        or "requesting",
+      "actor": author_to_json(rel.follower),
         "object": author_to_json(rel.followee),
     }
 
