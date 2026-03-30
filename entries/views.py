@@ -1086,7 +1086,12 @@ def author_entries_api(request: HttpRequest, author_id: UUID) -> HttpResponse:
 
     if request.method == "GET":
         viewer = _get_current_author(request)
-        allowed_visibilities = get_profile_entry_visibilities(viewer, author)
+
+        remote_allowed = _remote_node_allowed_visibilities(request, author)
+        if remote_allowed is not None and viewer is None:
+            allowed_visibilities = remote_allowed
+        else:
+            allowed_visibilities = get_profile_entry_visibilities(viewer, author)
 
         queryset = (
             Entry.objects.filter(
@@ -1206,3 +1211,55 @@ def entry_detail_api(
     entry.save()
     distribute_entry_to_remote_followers(entry)
     return HttpResponse(status=204)
+
+
+def _remote_node_allowed_visibilities(request: HttpRequest, author: Author) -> list[str] | None:
+    """
+    For node-authenticated GET /api/authors/{author}/entries requests, determine
+    which visibilities should be exposed to that remote node.
+
+    Since auth is at the node level, we allow:
+    - PUBLIC always
+    - UNLISTED if any remote author on that node is an approved follower of `author`
+    - FRIENDS if any remote author on that node is a mutual friend of `author`
+    """
+    user = getattr(request, "user", None)
+    if not user or not getattr(user, "is_authenticated", False):
+        return None
+
+    remote_node = getattr(user, "remote_node", None)
+    if not remote_node or not getattr(remote_node, "is_active", False):
+        return None
+
+    remote_authors = Author.objects.filter(
+        is_local=False,
+        is_deleted=False,
+        fqid__startswith=remote_node.base_url.rstrip("/"),
+    )
+
+    allowed = [Entry.VISIBILITY_PUBLIC]
+
+    has_follower = FollowRelationship.objects.filter(
+        follower__in=remote_authors,
+        followee=author,
+        status=FollowRelationship.Status.APPROVED,
+    ).exists()
+
+    if has_follower:
+        allowed.append(Entry.VISIBILITY_UNLISTED)
+
+    has_friend = FollowRelationship.objects.filter(
+        follower__in=remote_authors,
+        followee=author,
+        status=FollowRelationship.Status.APPROVED,
+    ).filter(
+        followee__in=FollowRelationship.objects.filter(
+            follower=author,
+            status=FollowRelationship.Status.APPROVED,
+        ).values("followee")
+    ).exists()
+
+    if has_friend:
+        allowed.append(Entry.VISIBILITY_FRIENDS)
+
+    return allowed
