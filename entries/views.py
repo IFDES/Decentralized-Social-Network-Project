@@ -328,14 +328,35 @@ def _entry_to_json(request: HttpRequest, entry: Entry) -> dict:
     likes_page = list(likes_queryset[:5])
     likes_payload = likes_list_json(entry, 1, 5, likes_count, likes_page)
 
+    description = getattr(entry, "description", "") or ""
+    content_type = entry.content_type
+    content = entry.content
+
+    # For interoperability: inline base64 bytes for image entries in GET responses.
+    # Remote nodes that pull entries (instead of relying on inbox pushes) can still
+    # reconstruct the image without needing to hit the /image endpoint.
+    if _entry_content_type_is_image(content_type):
+        hosted = entry.hosted_images.first()
+        if hosted:
+            if getattr(hosted, "data_base64", ""):
+                content = hosted.data_base64
+            elif hosted.file:
+                try:
+                    raw = hosted.file.read()
+                    content = base64.b64encode(raw).decode("ascii")
+                except (FileNotFoundError, OSError):
+                    content = ""
+        description = ""
+        content_type = Entry.CONTENT_IMAGE
+
     return {
         "type": "entry",
         "title": entry.title,
         "id": entry_id,
         "web": web,
-        "description": getattr(entry, "description", "") or "",
-        "contentType": entry.content_type,
-        "content": entry.content,
+        "description": description,
+        "contentType": content_type,
+        "content": content,
         "author": author_to_json(author),
         "comments": comments_payload,
         "likes": likes_payload,

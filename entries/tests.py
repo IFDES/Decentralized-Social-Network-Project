@@ -1,4 +1,5 @@
 import json
+import base64
 
 from datetime import datetime, timezone
 
@@ -378,6 +379,52 @@ class StreamApiTests(TestCase):
 
         returned_ids = [item["id"] for item in payload["src"]]
         self.assertIn(str(remote_entry.fqid), returned_ids)
+
+    def test_stream_inlines_base64_for_image_entries(self):
+        """
+        For pull-based interoperability, image entries should include base64 bytes
+        in `content` on GET stream responses.
+        """
+        from django.core.files.base import ContentFile
+        from entries.models import HostedImage
+
+        # Ensure we're authenticated so stream returns entries deterministically
+        self.client.login(username="stream_owner", password="passA12345")
+
+        png_base64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+kbXQAAAAASUVORK5CYII="
+        png_bytes = base64.b64decode(png_base64)
+
+        entry = Entry.objects.create(
+            author=self.author,
+            title="Image",
+            content="",
+            content_type=Entry.CONTENT_IMAGE,
+            visibility=Entry.VISIBILITY_PUBLIC,
+        )
+        HostedImage.objects.create(
+            uploaded_by=self.author,
+            entry=entry,
+            visibility=Entry.VISIBILITY_PUBLIC,
+            file=ContentFile(png_bytes, name="t.png"),
+            data_base64=png_base64,
+            content_type="image/png",
+        )
+
+        resp = self.client.get(reverse("entries:stream-api"))
+        self.assertEqual(resp.status_code, 200)
+        payload = resp.json()
+        items = payload.get("src") or []
+        self.assertGreaterEqual(len(items), 1)
+
+        # Find our entry.
+        found = None
+        for it in items:
+            if it.get("id") == str(entry.fqid):
+                found = it
+                break
+        self.assertIsNotNone(found)
+        self.assertEqual(found.get("contentType"), "Image")
+        self.assertEqual(found.get("content"), png_base64)
 
     def test_stream_returns_latest_edited_version_once(self):
         entry = Entry.objects.create(
@@ -1214,3 +1261,44 @@ class EntryDistributionTests(TestCase):
             distribute_entry_to_remote_followers(entry)
 
         mock_req.assert_called_once()
+
+    def test_image_entry_distributed_with_base64_content(self):
+        """
+        Image entries should be pushed to remote inboxes with base64 bytes in `content`.
+        """
+        from unittest.mock import patch, MagicMock
+        from django.core.files.base import ContentFile
+        from entries.distribution import distribute_entry_to_remote_followers
+        from entries.models import HostedImage
+
+        # 1x1 transparent PNG (base64)
+        png_base64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+kbXQAAAAASUVORK5CYII="
+        png_bytes = base64.b64decode(png_base64)
+
+        entry = Entry.objects.create(
+            author=self.local_author,
+            title="Img",
+            content="",
+            content_type=Entry.CONTENT_IMAGE,
+            visibility=Entry.VISIBILITY_PUBLIC,
+        )
+
+        HostedImage.objects.create(
+            uploaded_by=self.local_author,
+            entry=entry,
+            visibility=Entry.VISIBILITY_PUBLIC,
+            file=ContentFile(png_bytes, name="t.png"),
+            data_base64=png_base64,
+            content_type="image/png",
+        )
+
+        with patch("entries.distribution.make_node_request") as mock_req:
+            mock_req.return_value = MagicMock(status_code=201)
+            distribute_entry_to_remote_followers(entry)
+
+        mock_req.assert_called_once()
+        _, kwargs = mock_req.call_args
+        payload = kwargs["json"]
+        self.assertEqual(payload["type"], "entry")
+        self.assertEqual(payload["contentType"], "Image")
+        self.assertEqual(payload["content"], png_base64)
