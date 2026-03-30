@@ -2,15 +2,17 @@ import json
 import logging
 from uuid import UUID
 from urllib.parse import urljoin
+from datetime import datetime, timezone
 
 from django.apps import apps
-from django.http import HttpRequest, HttpResponseBadRequest, HttpResponseForbidden, JsonResponse
+from django.db import IntegrityError
+from django.http import HttpRequest, HttpResponse, HttpResponseBadRequest, HttpResponseForbidden, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 from django.contrib.auth.decorators import login_required
 
-from config.core.permissions import user_matches_author_uuid
+from config.core.permissions import require_admin_user, user_matches_author_uuid
 from follows.models import FollowRelationship
 
 from django.contrib.auth.models import User
@@ -25,23 +27,26 @@ logger = logging.getLogger(__name__)
 def _author_api_id(request: HttpRequest, author: Author) -> str:
     if author.fqid:
         return author.fqid
-    return urljoin(request.build_absolute_uri("/"), f"api/authors/{author.uuid}")
+    from django.conf import settings
+    base = settings.SERVICE_BASE_URL.rstrip("/")
+    return f"{base}/api/authors/{author.uuid}"
 
 
 def _author_to_dict(request: HttpRequest, author: Author) -> dict:
+    from django.conf import settings
     fqid = _author_api_id(request, author)
-    host = author.host or urljoin(request.build_absolute_uri("/"), "api/")
-    web = author.web or urljoin(request.build_absolute_uri("/"), f"authors/{author.uuid}")
+    base = settings.SERVICE_BASE_URL.rstrip("/")
+    host = author.host or f"{base}/api/"
+    web = author.web or f"{base}/authors/{author.uuid}"
 
     return {
         "type": "author",
         "id": fqid,
         "host": host,
-        "web": web,
         "displayName": author.display_name,
         "github": author.github,
         "profileImage": author.profile_image,
-        "description": author.description,
+        "web": web,
     }
 
 
@@ -364,3 +369,145 @@ def signup_page(request: HttpRequest):
         form = SignupForm()
 
     return render(request, "registration/signup.html", {"form": form})
+
+
+def _parse_json_or_400(request: HttpRequest):
+    try:
+        return json.loads(request.body.decode("utf-8") or "{}"), None
+    except json.JSONDecodeError:
+        return None, JsonResponse({"error": "Invalid JSON body."}, status=400)
+
+
+def _base_urls_for_author(request: HttpRequest, author: Author) -> tuple[str, str, str]:
+    base = request.build_absolute_uri("/").rstrip("/")
+    fqid = f"{base}/api/authors/{author.uuid}"
+    web = f"{base}/authors/{author.uuid}"
+    host = f"{base}/api/"
+    return fqid, web, host
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+@require_admin_user
+def admin_authors_api(request: HttpRequest):
+    """
+    Admin-only endpoint to create an author (and optional mapped local user).
+    """
+    payload, error = _parse_json_or_400(request)
+    if error:
+        return error
+
+    display_name = (payload.get("displayName") or payload.get("display_name") or "").strip()
+    if not display_name:
+        return JsonResponse({"error": "Field 'displayName' is required."}, status=400)
+
+    is_local = bool(payload.get("isLocal", True))
+
+    author = Author(
+        display_name=display_name,
+        github=payload.get("github", "") or "",
+        profile_image=payload.get("profileImage", payload.get("profile_image", "")) or "",
+        description=payload.get("description", "") or "",
+        is_local=is_local,
+        is_deleted=False,
+    )
+
+    # For local authors, default to this node's URLs unless explicitly overridden.
+    default_fqid, default_web, default_host = _base_urls_for_author(request, author)
+    author.fqid = payload.get("id") or payload.get("fqid") or default_fqid
+    author.web = payload.get("web") or default_web
+    author.host = payload.get("host") or default_host
+
+    user = None
+    username = (payload.get("username") or "").strip()
+    password = payload.get("password") or ""
+    is_active = bool(payload.get("isActive", True))
+
+    if username or password:
+        if not username or not password:
+            return JsonResponse(
+                {"error": "Both 'username' and 'password' are required when creating a linked user."},
+                status=400,
+            )
+        if User.objects.filter(username=username).exists():
+            return JsonResponse({"error": "Username already exists."}, status=400)
+
+    try:
+        author.save()
+        if username and password:
+            user = User.objects.create_user(
+                username=username,
+                password=password,
+                is_active=is_active,
+            )
+            AuthorAccount.objects.create(user=user, author=author)
+    except IntegrityError:
+        return JsonResponse({"error": "Author with the same id/fqid already exists."}, status=400)
+
+    return JsonResponse(
+        {
+            "type": "admin_author_create",
+            "author": _author_to_dict(request, author),
+            "linkedUser": user.username if user else None,
+        },
+        status=201,
+    )
+
+
+@csrf_exempt
+@require_http_methods(["PUT", "DELETE"])
+@require_admin_user
+def admin_author_detail_api(request: HttpRequest, author_id: UUID):
+    """
+    Admin-only endpoint to update or soft-delete an author.
+    """
+    author = get_object_or_404(Author, pk=author_id)
+
+    if request.method == "DELETE":
+        if not author.is_deleted:
+            author.is_deleted = True
+            author.deleted_at = datetime.now(timezone.utc)
+            author.save(update_fields=["is_deleted", "deleted_at", "updated_at"])
+        return HttpResponse(status=204)
+
+    payload, error = _parse_json_or_400(request)
+    if error:
+        return error
+
+    if "displayName" in payload:
+        display_name = (payload.get("displayName") or "").strip()
+        if not display_name:
+            return JsonResponse({"error": "Field 'displayName' cannot be blank."}, status=400)
+        author.display_name = display_name
+
+    if "github" in payload:
+        author.github = payload.get("github") or ""
+    if "profileImage" in payload:
+        author.profile_image = payload.get("profileImage") or ""
+    if "description" in payload:
+        author.description = payload.get("description") or ""
+    if "host" in payload:
+        author.host = payload.get("host") or ""
+    if "web" in payload:
+        author.web = payload.get("web") or ""
+    if "id" in payload or "fqid" in payload:
+        author.fqid = payload.get("id") or payload.get("fqid") or None
+    if "isLocal" in payload:
+        author.is_local = bool(payload.get("isLocal"))
+    if "isDeleted" in payload:
+        new_is_deleted = bool(payload.get("isDeleted"))
+        author.is_deleted = new_is_deleted
+        author.deleted_at = datetime.now(timezone.utc) if new_is_deleted else None
+
+    try:
+        author.save()
+    except IntegrityError:
+        return JsonResponse({"error": "Author update conflicts with an existing fqid."}, status=400)
+
+    return JsonResponse(
+        {
+            "type": "admin_author_update",
+            "author": _author_to_dict(request, author),
+        },
+        status=200,
+    )

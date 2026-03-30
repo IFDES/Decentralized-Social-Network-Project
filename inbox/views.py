@@ -242,8 +242,6 @@ def _decode_and_store_image(entry: Entry, remote_author: Author, content: str, c
         entry=entry,
     )
 
-
-def _handle_entry_payload(local_author: Author, payload: dict):
     """
     Ingest a remote entry into the local database.
     The entry is associated with the remote author from the payload
@@ -265,6 +263,7 @@ def _handle_entry_payload(local_author: Author, payload: dict):
         raise ValueError("Entry payload is missing 'id' (FQID).")
 
     title = payload.get("title", "")
+    description = payload.get("description", "")
     content = payload.get("content", "")
     content_type = payload.get("contentType", Entry.CONTENT_TEXT_PLAIN)
     visibility = payload.get("visibility", Entry.VISIBILITY_PUBLIC)
@@ -277,10 +276,10 @@ def _handle_entry_payload(local_author: Author, payload: dict):
     is_base64_image = content_type in _BASE64_IMAGE_CONTENT_TYPES
     stored_content_type = Entry.CONTENT_TEXT_PLAIN if is_base64_image else content_type
 
-    # Use fqid for deduplication — if we already have this entry, update it
     try:
         entry = Entry.objects.get(fqid=entry_fqid)
         entry.title = title
+        entry.description = description
         entry.content = content if not is_base64_image else ""
         entry.content_type = stored_content_type
         entry.visibility = visibility
@@ -292,6 +291,7 @@ def _handle_entry_payload(local_author: Author, payload: dict):
         entry = Entry.objects.create(
             author=remote_author,
             title=title,
+            description=description,
             content=content if not is_base64_image else "",
             content_type=stored_content_type,
             visibility=visibility,

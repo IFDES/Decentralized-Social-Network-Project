@@ -23,6 +23,7 @@ from django.http import FileResponse
 
 from authors.models import Author, AuthorAccount
 from config.core.permissions import user_matches_author_uuid
+from config.core.serializers import author_to_json
 from follows.models import FollowRelationship
 from interactions.models import Comment, CommentLike, EntryLike
 from interactions.serializers import comments_list_json, likes_list_json
@@ -287,8 +288,6 @@ def _entry_to_json(request: HttpRequest, entry: Entry) -> dict:
     entry_id = _build_entry_id(author, entry)
     web = _build_entry_web(author, entry)
 
-    base = settings.SERVICE_BASE_URL.rstrip("/")
-
     comments_queryset = get_visible_comments_queryset(
         entry,
         viewer,
@@ -307,34 +306,19 @@ def _entry_to_json(request: HttpRequest, entry: Entry) -> dict:
     likes_page = list(likes_queryset[:5])
     likes_payload = likes_list_json(entry, 1, 5, likes_count, likes_page)
 
-    image_urls = [
-        _hosted_image_canonical_url(request, hosted)
-        for hosted in entry.hosted_images.all()
-    ]
-
     return {
         "type": "entry",
         "title": entry.title,
         "id": entry_id,
         "web": web,
+        "description": getattr(entry, "description", "") or "",
         "contentType": entry.content_type,
         "content": entry.content,
-        "author": {
-            "type": "author",
-            "id": author.fqid
-            or f"{base}/api/authors/{author.uuid}",
-            "host": author.host or f"{base}/api/",
-            "displayName": author.display_name,
-            "web": author.web or f"{base}/authors/{author.uuid}",
-            "github": author.github,
-            "profileImage": author.profile_image,
-        },
+        "author": author_to_json(author),
         "comments": comments_payload,
         "likes": likes_payload,
         "published": entry.published.astimezone(timezone.utc).isoformat(),
-        "updated_at": entry.updated_at.astimezone(timezone.utc).isoformat(),
         "visibility": entry.visibility,
-        "image_urls": image_urls,
     }
 
 
@@ -1124,6 +1108,7 @@ def author_entries_api(request: HttpRequest, author_id: UUID) -> HttpResponse:
         return HttpResponseBadRequest(str(exc))
 
     title = payload.get("title", "")
+    description = payload.get("description", "")
     content = payload.get("content")
     content_type = payload.get("contentType") or Entry.CONTENT_TEXT_PLAIN
     visibility = payload.get("visibility") or Entry.VISIBILITY_PUBLIC
@@ -1140,6 +1125,7 @@ def author_entries_api(request: HttpRequest, author_id: UUID) -> HttpResponse:
     entry = Entry.objects.create(
         author=author,
         title=title,
+        description=description,
         content=content,
         content_type=content_type,
         visibility=visibility,
@@ -1180,6 +1166,7 @@ def entry_detail_api(
             return HttpResponseBadRequest(str(exc))
 
         title = payload.get("title", entry.title)
+        description = payload.get("description", getattr(entry, "description", ""))
         content = payload.get("content", entry.content)
         content_type = payload.get("contentType", entry.content_type)
         visibility = payload.get("visibility", entry.visibility)
@@ -1194,6 +1181,7 @@ def entry_detail_api(
             return HttpResponseBadRequest("Unsupported visibility value.")
 
         entry.title = title
+        entry.description = description
         entry.content = content
         entry.content_type = content_type
         entry.visibility = visibility

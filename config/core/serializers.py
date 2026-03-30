@@ -62,7 +62,7 @@ def author_to_json(author) -> dict:
         "displayName": "Greg Johnson",
         "github": "http://github.com/gjohnson",
         "profileImage": "https://i.imgur.com/k7XVwpB.jpeg",
-        "web": "http://nodeaaaa/authors/greg",
+        "web": "http://nodeaaaa/authors/greg"
     }
     """
     fqid = author.fqid or build_author_id(author)
@@ -73,10 +73,10 @@ def author_to_json(author) -> dict:
         "type": "author",
         "id": fqid,
         "host": host,
-        "web": web,
         "displayName": author.display_name or "",
         "github": author.github or "",
         "profileImage": author.profile_image or "",
+        "web": web,
     }
 
 # Add other serializers here later.

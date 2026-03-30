@@ -40,13 +40,25 @@ def _build_likes_api_url(entry: Entry) -> str:
     return f"{base}/api/authors/{entry.author.uuid}/entries/{entry.uuid}/likes"
 
 
+def _build_comment_id(comment: Comment) -> str:
+    if comment.fqid:
+        return comment.fqid
+    base = settings.SERVICE_BASE_URL.rstrip("/")
+    return f"{base}/api/authors/{comment.author.uuid}/commented/{comment.uuid}"
+
+
 def comment_to_json(comment: Comment, like_count: int | None = None) -> dict:
     entry = comment.entry
     entry_id = _build_entry_id(entry)
     web = _build_entry_web(entry)
 
-    base = settings.SERVICE_BASE_URL.rstrip("/")
-    comment_id = comment.fqid or f"{base}/api/authors/{comment.author.uuid}/commented/{comment.uuid}"
+    comment_id = _build_comment_id(comment)
+    likes_url = _build_comment_likes_api_url(comment)
+    likes_web = _build_comment_likes_web_url(comment)
+
+    likes_qs = CommentLike.objects.filter(comment=comment).select_related("author", "comment").order_by("-published")
+    likes_count = likes_qs.count()
+    likes_page = list(likes_qs[:5])
 
     data = {
         "type": "comment",
@@ -57,6 +69,15 @@ def comment_to_json(comment: Comment, like_count: int | None = None) -> dict:
         "id": comment_id,
         "entry": entry_id,
         "web": web,
+        "likes": {
+            "type": "likes",
+            "id": likes_url,
+            "web": likes_web,
+            "page_number": 1,
+            "size": 5,
+            "count": likes_count,
+            "src": [comment_like_to_json(cl) for cl in likes_page],
+        },
     }
     if like_count is not None:
         data["like_count"] = like_count
@@ -137,12 +158,13 @@ def comment_like_to_json(cl: CommentLike) -> dict:
 
 
 def _build_comment_likes_api_url(comment: Comment) -> str:
-    entry = comment.entry
     base = settings.SERVICE_BASE_URL.rstrip("/")
-    return (
-        f"{base}/api/authors/{entry.author.uuid}/entries/{entry.uuid}"
-        f"/comments/{comment.uuid}/likes"
-    )
+    return f"{base}/api/authors/{comment.author.uuid}/commented/{comment.uuid}/likes"
+
+
+def _build_comment_likes_web_url(comment: Comment) -> str:
+    base = settings.SERVICE_BASE_URL.rstrip("/")
+    return f"{base}/authors/{comment.author.uuid}/commented/{comment.uuid}/likes"
 
 
 def comment_likes_list_json(
@@ -155,6 +177,7 @@ def comment_likes_list_json(
     return {
         "type": "likes",
         "id": _build_comment_likes_api_url(comment),
+        "web": _build_comment_likes_web_url(comment),
         "page_number": page_number,
         "size": size,
         "count": count,

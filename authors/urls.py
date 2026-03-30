@@ -7,6 +7,10 @@ app_name = "authors"
 urlpatterns = [
     path("api/authors", views.authors_api, name="authors-api"),
     path("api/authors/", views.authors_api),
+    path("api/admin/authors", views.admin_authors_api, name="admin-authors-api"),
+    path("api/admin/authors/", views.admin_authors_api),
+    path("api/admin/authors/<uuid:author_id>", views.admin_author_detail_api, name="admin-author-detail-api"),
+    path("api/admin/authors/<uuid:author_id>/", views.admin_author_detail_api),
     path("authors/<uuid:author_id>", views.author_profile_page, name="profile"),
     path("authors/<uuid:author_id>/", views.author_profile_page),
     path("authors/<uuid:author_id>/edit", views.edit_author_profile_page, name="edit_profile"),

@@ -95,6 +95,7 @@ class Entry(models.Model):
     )
 
     title = models.CharField(max_length=255, blank=True)
+    description = models.TextField(blank=True, default="", help_text="A brief description of the entry.")
 
     content_type = models.CharField(
         max_length=64,
@@ -107,6 +108,7 @@ class Entry(models.Model):
         max_length=16,
         choices=VISIBILITY_CHOICES,
         default=VISIBILITY_PUBLIC,
+        db_index=True,
     )
 
     external_id = models.CharField(
@@ -117,10 +119,10 @@ class Entry(models.Model):
         help_text="External ID for deduplication (e.g. GitHub event ID).",
     )
 
-    is_deleted = models.BooleanField(default=False)
+    is_deleted = models.BooleanField(default=False, db_index=True)
     deleted_at = models.DateTimeField(null=True, blank=True)
 
-    published = models.DateTimeField(auto_now_add=True)
+    published = models.DateTimeField(auto_now_add=True, db_index=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
