@@ -13,16 +13,28 @@ class FollowRelationship(models.Model):
       - APPROVED: follow is active
       - DENIED: follow request was rejected
 
-    Notes:
-      - External API payloads do not need to expose this internal status.
-      - A follow request from A to B is stored as (A -> B).
-      - If B accepts, that same row becomes APPROVED.
+    External/spec-facing state vocabulary:
+      - requesting
+      - accepted
+      - rejected
     """
 
     class Status(models.TextChoices):
         PENDING = "PENDING", "Pending"
         APPROVED = "APPROVED", "Approved"
         DENIED = "DENIED", "Denied"
+
+    STATUS_TO_STATE = {
+        Status.PENDING: "requesting",
+        Status.APPROVED: "accepted",
+        Status.DENIED: "rejected",
+    }
+
+    STATE_TO_STATUS = {
+        "requesting": Status.PENDING,
+        "accepted": Status.APPROVED,
+        "rejected": Status.DENIED,
+    }
 
     follower = models.ForeignKey(
         "authors.Author",
@@ -43,6 +55,15 @@ class FollowRelationship(models.Model):
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    @property
+    def state(self) -> str:
+        return self.STATUS_TO_STATE.get(self.status, "requesting")
+
+    def set_state(self, state: str) -> None:
+        if state not in self.STATE_TO_STATUS:
+            raise ValueError(f"Invalid follow state: {state}")
+        self.status = self.STATE_TO_STATUS[state]
 
     @staticmethod
     def friends_of(author):
@@ -93,7 +114,8 @@ class FollowRelationship(models.Model):
                 followee=b,
                 status=FollowRelationship.Status.APPROVED,
             ).exists()
-            and FollowRelationship.objects.filter(
+            and
+            FollowRelationship.objects.filter(
                 follower=b,
                 followee=a,
                 status=FollowRelationship.Status.APPROVED,
