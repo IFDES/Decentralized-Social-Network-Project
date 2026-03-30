@@ -131,6 +131,8 @@ def handle_remote_entry_payload(payload: dict):
             file=ContentFile(image_data, name=filename),
             visibility=visibility,
             entry=entry,
+            data_base64=base64.b64encode(image_data).decode("ascii"),
+            content_type="image/png" if ext == ".png" else ("image/jpeg" if ext == ".jpg" else ("image/gif" if ext == ".gif" else ("image/webp" if ext == ".webp" else ""))),
         )
 
     entry, created = Entry.objects.get_or_create(

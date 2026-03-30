@@ -27,6 +27,10 @@ class HostedImage(models.Model):
     """
     uuid = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     file = models.ImageField(upload_to="entries/images/%Y/%m/")
+    # Heroku's filesystem is ephemeral; persist bytes as a fallback so images
+    # remain viewable after restart/redeploy.
+    data_base64 = models.TextField(blank=True, default="")
+    content_type = models.CharField(max_length=100, blank=True, default="")
     uploaded_by = models.ForeignKey(
         Author,
         related_name="hosted_images",
@@ -51,6 +55,21 @@ class HostedImage(models.Model):
 
     class Meta:
         ordering = ["-created_at"]
+
+    def delete(self, *args, **kwargs):
+        """
+        Best-effort delete: if the underlying file is already missing on disk
+        (common on ephemeral filesystems), still allow the DB row to be removed.
+        """
+        try:
+            if self.file:
+                try:
+                    self.file.delete(save=False)
+                except (FileNotFoundError, OSError):
+                    pass
+        except Exception:
+            pass
+        return super().delete(*args, **kwargs)
 
 # This piece of code is assisted by CoPilot on 27 Feb 2026 02:05 with the prompt
 # "Help me polish this section of code and fill in missing parts on entries in a social media platform in Django"

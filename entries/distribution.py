@@ -49,11 +49,22 @@ def _entry_to_inbox_json(entry: Entry) -> dict:
         or (isinstance(content_type, str) and content_type.startswith("image/"))
     ):
         hosted = entry.hosted_images.first()
-        if hosted and hosted.file:
-            raw = hosted.file.read()
-            content = base64.b64encode(raw).decode("ascii")
-            # Normalize all image base64 payloads to a single contentType.
-            content_type = Entry.CONTENT_IMAGE
+        if hosted:
+            # Prefer DB-stored bytes (survives ephemeral filesystems) and fall back to disk.
+            if getattr(hosted, "data_base64", ""):
+                content = hosted.data_base64
+                content_type = Entry.CONTENT_IMAGE
+            elif hosted.file:
+                try:
+                    raw = hosted.file.read()
+                    content = base64.b64encode(raw).decode("ascii")
+                    # Normalize all image base64 payloads to a single contentType.
+                    content_type = Entry.CONTENT_IMAGE
+                except (FileNotFoundError, OSError):
+                    # If the file is missing (e.g., after Heroku restart), still
+                    # emit a valid entry object; recipients will just not get bytes.
+                    content = ""
+                    content_type = Entry.CONTENT_IMAGE
 
         # For image entries we don't send textual description/content.
         description = ""

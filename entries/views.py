@@ -50,9 +50,10 @@ from .visibility import (
 from .remote_ingest import handle_remote_entry_payload
 
 import base64
+import binascii
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlencode
 
 from config.core.models import RemoteNode
 
@@ -122,11 +123,20 @@ def _build_image_urls_from_request(
     for f in request.FILES.getlist("image_files") or []:
         if f.content_type in allowed:
             try:
+                # Persist bytes in DB as fallback for ephemeral filesystems.
+                try:
+                    raw = f.read()
+                    f.seek(0)
+                    data_base64 = base64.b64encode(raw).decode("ascii")
+                except Exception:
+                    data_base64 = ""
                 HostedImage.objects.create(
                     uploaded_by=author,
                     file=f,
                     visibility=visibility,
                     entry=entry,
+                    data_base64=data_base64,
+                    content_type=getattr(f, "content_type", "") or "",
                 )
             except Exception as exc:
                 print(f"Failed ingesting remote entry: {exc}")
@@ -1003,25 +1013,36 @@ def serve_hosted_image(request: HttpRequest, image_id: UUID) -> HttpResponse:
 
         # PUBLIC and UNLISTED are allowed by direct link
 
-    if not hosted.file:
-        return HttpResponseBadRequest("Image file missing.")
+    # Prefer serving from disk when available.
+    if hosted.file:
+        try:
+            f = hosted.file.open("rb")
+            content_type, _ = mimetypes.guess_type(hosted.file.name)
+            if not content_type:
+                content_type = hosted.content_type or "application/octet-stream"
 
-    try:
-        f = hosted.file.open("rb")
-    except (FileNotFoundError, OSError):
-        return HttpResponseBadRequest("Image file not found on disk.")
+            response = FileResponse(
+                f,
+                as_attachment=False,
+                filename=hosted.file.name.split("/")[-1],
+            )
+            response["Content-Type"] = content_type
+            return response
+        except (FileNotFoundError, OSError):
+            # Fall through to DB-backed bytes if present.
+            pass
 
-    content_type, _ = mimetypes.guess_type(hosted.file.name)
-    if not content_type:
-        content_type = "application/octet-stream"
+    # Fallback: serve bytes stored in DB (useful on ephemeral filesystems like Heroku).
+    if hosted.data_base64:
+        try:
+            raw = base64.b64decode(hosted.data_base64)
+        except (binascii.Error, ValueError):
+            return HttpResponseBadRequest("Stored image data is corrupted.")
 
-    response = FileResponse(
-        f,
-        as_attachment=False,
-        filename=hosted.file.name.split("/")[-1],
-    )
-    response["Content-Type"] = content_type
-    return response
+        content_type = hosted.content_type or "application/octet-stream"
+        return HttpResponse(raw, content_type=content_type)
+
+    return HttpResponseBadRequest("Image data missing.")
 
 
 def _entry_content_type_is_image(content_type: str | None) -> bool:
@@ -1150,10 +1171,18 @@ def image_upload_page(request: HttpRequest, author_id: UUID) -> HttpResponse:
                 {"author": author, "error": f"Unsupported type. Use: {', '.join(sorted(allowed))}"},
             )
         try:
+            try:
+                raw = file.read()
+                file.seek(0)
+                data_base64 = base64.b64encode(raw).decode("ascii")
+            except Exception:
+                data_base64 = ""
             hosted = HostedImage.objects.create(
                 uploaded_by=author,
                 file=file,
                 visibility=Entry.VISIBILITY_PUBLIC,
+                data_base64=data_base64,
+                content_type=getattr(file, "content_type", "") or "",
             )
             url = _hosted_image_canonical_url(request, hosted)
             return render(
@@ -1185,10 +1214,18 @@ def image_upload_api(request: HttpRequest, author_id: UUID) -> HttpResponse:
             f"Unsupported content type. Allowed: {', '.join(sorted(allowed))}"
         )
     try:
+        try:
+            raw = file.read()
+            file.seek(0)
+            data_base64 = base64.b64encode(raw).decode("ascii")
+        except Exception:
+            data_base64 = ""
         hosted = HostedImage.objects.create(
             uploaded_by=author,
             file=file,
             visibility=Entry.VISIBILITY_PUBLIC,
+            data_base64=data_base64,
+            content_type=getattr(file, "content_type", "") or "",
         )
     except Exception as e:
         return HttpResponseBadRequest(str(e))
