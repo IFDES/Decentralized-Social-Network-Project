@@ -5,9 +5,7 @@ Called after a local author creates (or edits) an entry so that remote nodes
 hosting followers can ingest the content.
 """
 
-import base64
 import logging
-import mimetypes
 from datetime import timezone as tz
 from urllib.parse import urlparse
 
@@ -20,31 +18,9 @@ from config.core.request_utils import make_node_request
 from config.core.serializers import author_to_json
 from follows.models import FollowRelationship
 
-from .models import Entry, HostedImage
+from .models import Entry
 
 logger = logging.getLogger(__name__)
-
-
-def _encode_hosted_image_base64(hosted: HostedImage) -> tuple[str, str] | None:
-    """
-    Read a HostedImage file and return (base64_content, content_type_with_base64)
-    e.g. ("iVBOR...", "image/png;base64").  Returns None on failure.
-    """
-    if not hosted.file:
-        return None
-    try:
-        mime, _ = mimetypes.guess_type(hosted.file.name)
-        if not mime or not mime.startswith("image/"):
-            mime = "application/base64"
-        with hosted.file.open("rb") as f:
-            data = f.read()
-        encoded = base64.b64encode(data).decode("ascii")
-        if mime == "application/base64":
-            return encoded, "application/base64"
-        return encoded, f"{mime};base64"
-    except (FileNotFoundError, OSError) as exc:
-        logger.warning("Failed to read image file for HostedImage %s: %s", hosted.uuid, exc)
-        return None
 
 
 def _entry_to_inbox_json(entry: Entry) -> dict:
@@ -52,9 +28,6 @@ def _entry_to_inbox_json(entry: Entry) -> dict:
     Build a lightweight entry JSON payload suitable for pushing to a remote
     inbox.  Does NOT embed nested comments/likes (remote nodes should fetch
     those separately if they need them).
-
-    For image entries with HostedImage attachments, the first image is
-    base64-encoded inline so remote nodes can store a local copy.
     """
     author = entry.author
     base = settings.SERVICE_BASE_URL.rstrip("/")
@@ -62,27 +35,22 @@ def _entry_to_inbox_json(entry: Entry) -> dict:
     entry_id = entry.fqid or f"{base}/api/authors/{author.uuid}/entries/{entry.uuid}"
     web = entry.web or f"{base}/authors/{author.uuid}/entries/{entry.uuid}"
 
-    content = entry.content
-    content_type = entry.content_type
-
-    # For image entries, embed the first hosted image as base64
-    if entry.content_type == Entry.CONTENT_IMAGE:
-        hosted = entry.hosted_images.first()
-        if hosted:
-            result = _encode_hosted_image_base64(hosted)
-            if result:
-                content, content_type = result
+    image_urls = [
+        f"{base}/api/media/images/{hosted.uuid}/"
+        for hosted in entry.hosted_images.all()
+    ]
 
     return {
         "type": "entry",
         "title": entry.title,
         "id": entry_id,
         "web": web,
-        "contentType": content_type,
-        "content": content,
+        "contentType": entry.content_type,
+        "content": entry.content,
         "author": author_to_json(author),
         "published": entry.published.astimezone(tz.utc).isoformat(),
         "visibility": entry.visibility,
+        "image_urls": image_urls,
     }
 
 
