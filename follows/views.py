@@ -27,13 +27,6 @@ from .services import (
 
 
 def _create_or_rerequest_follow(me: Author, followee: Author) -> tuple[FollowRelationship, bool]:
-    """
-    Returns (relationship, should_send_remote_request)
-
-    should_send_remote_request is True when a remote inbox POST should happen:
-    - brand new follow request
-    - previously denied request re-opened as pending
-    """
     if me.pk == followee.pk:
         raise ValueError("You cannot follow yourself.")
 
@@ -73,13 +66,6 @@ def _get_current_author(request: HttpRequest):
 
 @login_required
 def follow_ui_page(request: HttpRequest) -> HttpResponse:
-    """
-    Local follow UI:
-    - uses logged-in user's AuthorAccount as 'me'
-    - shows local authors you can follow
-    - shows outgoing follows (pending/approved)
-    - shows incoming follow requests (pending) with approve/deny
-    """
     me = _get_current_author(request)
     if not me:
         return render(
@@ -101,13 +87,6 @@ def follow_ui_page(request: HttpRequest) -> HttpResponse:
         .exclude(uuid=me.uuid)
         .order_by("display_name")
     )
-
-    if len(local_authors) > 0:
-        for x in reversed(range(len(local_authors))):
-            authorObj = AuthorAccount.objects.get(author=local_authors[x])
-            user = authorObj.user
-            if not user.is_active:
-                local_authors.pop(x)
 
     outgoing_rels = list(
         FollowRelationship.objects.filter(
@@ -193,9 +172,6 @@ def _require_owner_or_remote_node_or_403(request: HttpRequest, author_uuid):
 
 
 def follow_to_json(rel: FollowRelationship) -> dict:
-    """
-    Minimal follow object matching the spec examples.
-    """
     return {
         "type": "follow",
         "summary": f"{rel.follower.display_name} wants to follow {rel.followee.display_name}",
@@ -287,11 +263,6 @@ def follow_remote_author_ui(request: HttpRequest) -> HttpResponse:
 @login_required
 @require_http_methods(["POST"])
 def unfollow_author_ui(request: HttpRequest) -> HttpResponse:
-    """
-    Local UI action:
-    - uses logged-in author's AuthorAccount as 'me'
-    - unfollows either a local or remote author by FQID
-    """
     me = _get_current_author(request)
     if not me:
         return HttpResponseForbidden("You must be mapped to an author to unfollow.")
@@ -358,12 +329,6 @@ def deny_request_ui(request: HttpRequest, rel_id: int) -> HttpResponse:
 @csrf_exempt
 @require_http_methods(["GET"])
 def following_list(request: HttpRequest, author_serial):
-    """
-    GET /api/authors/{AUTHOR_SERIAL}/following/
-
-    Returns authors that AUTHOR_SERIAL is currently following.
-    Strict interpretation: only APPROVED follows count as "following".
-    """
     me = get_object_or_404(Author, uuid=author_serial, is_deleted=False)
     forbidden = _require_owner_or_403(request, me.uuid)
     if forbidden:
@@ -371,7 +336,10 @@ def following_list(request: HttpRequest, author_serial):
 
     rels = FollowRelationship.objects.filter(
         follower=me,
-        status=FollowRelationship.Status.APPROVED,
+        status__in=[
+            FollowRelationship.Status.PENDING,
+            FollowRelationship.Status.APPROVED,
+        ],
         followee__is_deleted=False,
     ).select_related("followee")
 
@@ -386,11 +354,6 @@ def following_list(request: HttpRequest, author_serial):
 @csrf_exempt
 @require_http_methods(["GET", "PUT", "DELETE"])
 def following_detail(request: HttpRequest, author_serial, foreign_author_fqid):
-    """
-    GET    /api/authors/{AUTHOR_SERIAL}/following/{FOREIGN_AUTHOR_FQID}/
-    PUT    /api/authors/{AUTHOR_SERIAL}/following/{FOREIGN_AUTHOR_FQID}/
-    DELETE /api/authors/{AUTHOR_SERIAL}/following/{FOREIGN_AUTHOR_FQID}/
-    """
     me = get_object_or_404(Author, uuid=author_serial, is_deleted=False)
     forbidden = _require_owner_or_403(request, me.uuid)
     if forbidden:
@@ -415,7 +378,10 @@ def following_detail(request: HttpRequest, author_serial, foreign_author_fqid):
         rel = FollowRelationship.objects.filter(
             follower=me,
             followee=followee,
-            status=FollowRelationship.Status.APPROVED,
+            status__in=[
+                FollowRelationship.Status.PENDING,
+                FollowRelationship.Status.APPROVED,
+            ],
         ).first()
 
         if not rel:
@@ -441,7 +407,7 @@ def following_detail(request: HttpRequest, author_serial, foreign_author_fqid):
                     rel.delete()
                 return JsonResponse({"detail": str(exc)}, status=502)
 
-        return HttpResponse(status=201 if should_send else 200)
+        return JsonResponse(follow_to_json(rel), status=201 if should_send else 200)
 
     deleted, _ = FollowRelationship.objects.filter(
         follower=me,
@@ -457,11 +423,6 @@ def following_detail(request: HttpRequest, author_serial, foreign_author_fqid):
 @csrf_exempt
 @require_http_methods(["GET"])
 def followers_list(request: HttpRequest, author_serial):
-    """
-    GET /api/authors/{AUTHOR_SERIAL}/followers/
-
-    Returns approved followers of AUTHOR_SERIAL.
-    """
     me = get_object_or_404(Author, uuid=author_serial, is_deleted=False)
     forbidden = _require_owner_or_remote_node_or_403(request, me.uuid)
     if forbidden:
@@ -484,11 +445,6 @@ def followers_list(request: HttpRequest, author_serial):
 @csrf_exempt
 @require_http_methods(["GET", "PUT", "DELETE"])
 def followers_detail(request: HttpRequest, author_serial, foreign_author_fqid):
-    """
-    GET    /api/authors/{AUTHOR_SERIAL}/followers/{FOREIGN_AUTHOR_FQID}/
-    PUT    /api/authors/{AUTHOR_SERIAL}/followers/{FOREIGN_AUTHOR_FQID}/
-    DELETE /api/authors/{AUTHOR_SERIAL}/followers/{FOREIGN_AUTHOR_FQID}/
-    """
     me = get_object_or_404(Author, uuid=author_serial, is_deleted=False)
 
     if request.method == "GET":
@@ -530,7 +486,7 @@ def followers_detail(request: HttpRequest, author_serial, foreign_author_fqid):
         rel.status = FollowRelationship.Status.APPROVED
         rel.save(update_fields=["status", "updated_at"])
 
-        return JsonResponse(author_to_json(follower), status=200)
+        return JsonResponse(follow_to_json(rel), status=200)
 
     rel = FollowRelationship.objects.filter(
         follower=follower,
@@ -561,11 +517,6 @@ def followers_detail(request: HttpRequest, author_serial, foreign_author_fqid):
 @csrf_exempt
 @require_http_methods(["GET"])
 def follow_requests_list(request: HttpRequest, author_serial):
-    """
-    GET /api/authors/{AUTHOR_SERIAL}/follow_requests/
-
-    Returns incoming pending follow requests for AUTHOR_SERIAL.
-    """
     me = get_object_or_404(Author, uuid=author_serial, is_deleted=False)
     forbidden = _require_owner_or_403(request, me.uuid)
     if forbidden:

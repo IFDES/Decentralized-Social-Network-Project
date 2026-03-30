@@ -5,20 +5,6 @@ from authors.models import Author
 
 
 class FollowRelationship(models.Model):
-    """
-    Stores one directed follow relationship: follower -> followee.
-
-    Internal statuses:
-      - PENDING: follow request exists but has not been accepted yet
-      - APPROVED: follow is active
-      - DENIED: follow request was rejected
-
-    External/spec-facing state vocabulary:
-      - requesting
-      - accepted
-      - rejected
-    """
-
     class Status(models.TextChoices):
         PENDING = "PENDING", "Pending"
         APPROVED = "APPROVED", "Approved"
@@ -58,13 +44,7 @@ class FollowRelationship(models.Model):
 
     @property
     def state(self) -> str:
-        if self.status == self.Status.PENDING:
-            return "requesting"
-        if self.status == self.Status.APPROVED:
-            return "accepted"
-        if self.status == self.Status.DENIED:
-            return "rejected"
-        return "requesting"
+        return self.STATUS_TO_STATE.get(self.status, "requesting")
 
     def set_state(self, state: str) -> None:
         if state not in self.STATE_TO_STATUS:
@@ -73,15 +53,11 @@ class FollowRelationship(models.Model):
 
     @staticmethod
     def friends_of(author):
-        """
-        Returns Author objects that are mutual APPROVED follows with `author`.
-        """
         outgoing_approved = FollowRelationship.objects.filter(
             follower=author,
             followee=OuterRef("pk"),
             status=FollowRelationship.Status.APPROVED,
         )
-
         incoming_approved = FollowRelationship.objects.filter(
             follower=OuterRef("pk"),
             followee=author,
@@ -89,7 +65,6 @@ class FollowRelationship(models.Model):
         )
 
         queryset = Author.objects.all()
-
         if hasattr(Author, "is_deleted"):
             queryset = queryset.filter(is_deleted=False)
 
@@ -103,9 +78,6 @@ class FollowRelationship(models.Model):
 
     @staticmethod
     def are_friends(a, b) -> bool:
-        """
-        True only if both directions are APPROVED.
-        """
         if not a or not b:
             return False
 
@@ -120,8 +92,7 @@ class FollowRelationship(models.Model):
                 followee=b,
                 status=FollowRelationship.Status.APPROVED,
             ).exists()
-            and
-            FollowRelationship.objects.filter(
+            and FollowRelationship.objects.filter(
                 follower=b,
                 followee=a,
                 status=FollowRelationship.Status.APPROVED,
