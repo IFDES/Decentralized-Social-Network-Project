@@ -564,7 +564,26 @@ def author_inbox(request, author_serial):
                     status=403,
                 )
 
+            logger.warning(
+                "INBOX ENTRY RECEIVED: local_author=%s payload_id=%s payload_visibility=%s payload_type=%s payload_author=%s",
+                local_author.fqid or local_author.uuid,
+                payload.get("id"),
+                payload.get("visibility"),
+                payload.get("type"),
+                (payload.get("author") or {}).get("id"),
+            )
+
             entry, created = handle_remote_entry_payload(payload)
+
+            logger.warning(
+                "INBOX ENTRY INGESTED: local_author=%s entry_fqid=%s created=%s visibility=%s is_deleted=%s deleted_at=%s",
+                local_author.fqid or local_author.uuid,
+                entry.fqid,
+                created,
+                entry.visibility,
+                entry.is_deleted,
+                entry.deleted_at,
+            )
         except ValueError as exc:
             return JsonResponse(
                 {"type": "error", "detail": str(exc)},

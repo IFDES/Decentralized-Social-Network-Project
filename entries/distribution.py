@@ -132,7 +132,6 @@ def distribute_entry_to_remote_followers(entry: Entry) -> None:
     author = entry.author
 
     if entry.visibility in (Entry.VISIBILITY_PUBLIC, Entry.VISIBILITY_UNLISTED):
-        # All remote authors with APPROVED follow on this author
         remote_followers = (
             FollowRelationship.objects.filter(
                 followee=author,
@@ -144,11 +143,9 @@ def distribute_entry_to_remote_followers(entry: Entry) -> None:
         )
         recipients = Author.objects.filter(pk__in=remote_followers, is_deleted=False)
     elif entry.visibility == Entry.VISIBILITY_FRIENDS:
-        # FRIENDS visibility: mutual APPROVED follow, remote only
         friends = FollowRelationship.friends_of(author).filter(is_local=False)
         recipients = friends
     elif entry.visibility == Entry.VISIBILITY_DELETED:
-        # DELETED: notify both remote approved followers and remote friends (best effort).
         remote_follower_ids = (
             FollowRelationship.objects.filter(
                 followee=author,
@@ -164,16 +161,49 @@ def distribute_entry_to_remote_followers(entry: Entry) -> None:
             is_deleted=False,
         )
     else:
+        logger.warning(
+            "ENTRY FANOUT SKIP: entry=%s fqid=%s visibility=%s author=%s",
+            entry.uuid,
+            entry.fqid,
+            entry.visibility,
+            author.fqid or author.uuid,
+        )
         return
 
     payload = _entry_to_inbox_json(entry)
+
+    recipient_list = list(recipients)
+    logger.warning(
+        "ENTRY FANOUT START: entry=%s fqid=%s visibility=%s is_deleted=%s deleted_at=%s author=%s recipients=%s",
+        entry.uuid,
+        entry.fqid,
+        entry.visibility,
+        entry.is_deleted,
+        entry.deleted_at,
+        author.fqid or author.uuid,
+        len(recipient_list),
+    )
+
+    for r in recipient_list:
+        logger.warning(
+            "ENTRY FANOUT RECIPIENT CANDIDATE: entry=%s recipient_pk=%s recipient_fqid=%s recipient_host=%s recipient_is_local=%s",
+            entry.uuid,
+            r.pk,
+            r.fqid,
+            r.host,
+            r.is_local,
+        )
+
     sent_targets: set[tuple[str, str]] = set()
 
-    for recipient in recipients:
+    for recipient in recipient_list:
         node = _remote_node_for_author(recipient)
         if node is None:
-            logger.debug(
-                "No RemoteNode found for remote author %s — skipping.",
+            logger.warning(
+                "ENTRY FANOUT NO NODE: entry=%s recipient=%s host=%s fqid=%s",
+                entry.uuid,
+                recipient.pk,
+                recipient.host,
                 recipient.fqid,
             )
             continue
@@ -184,29 +214,59 @@ def distribute_entry_to_remote_followers(entry: Entry) -> None:
 
         inbox_path = f"api/authors/{recipient_uuid}/inbox"
         target_key = (str(node.base_url), inbox_path)
+
+        logger.warning(
+            "ENTRY FANOUT TARGET: entry=%s recipient=%s node_base=%s inbox_path=%s target_key=%s",
+            entry.uuid,
+            recipient.fqid or recipient.pk,
+            node.base_url,
+            inbox_path,
+            target_key,
+        )
+
         if target_key in sent_targets:
+            logger.warning(
+                "ENTRY FANOUT DUPLICATE SKIP: entry=%s recipient=%s target_key=%s",
+                entry.uuid,
+                recipient.fqid or recipient.pk,
+                target_key,
+            )
             continue
+
         sent_targets.add(target_key)
 
         try:
-            resp = make_node_request(node, "POST", inbox_path, json=payload)
-            logger.info(
-                "Distributed entry %s to %s — HTTP %s",
+            logger.warning(
+                "ENTRY FANOUT POSTING: entry=%s payload_id=%s payload_visibility=%s payload_type=%s to=%s",
                 entry.uuid,
-                recipient.fqid,
-                resp.status_code,
+                payload.get("id"),
+                payload.get("visibility"),
+                payload.get("type"),
+                f"{node.base_url}/{inbox_path}",
+            )
+
+            resp = make_node_request(node, "POST", inbox_path, json=payload)
+
+            logger.warning(
+                "ENTRY FANOUT RESPONSE: entry=%s recipient=%s status=%s body=%s",
+                entry.uuid,
+                recipient.fqid or recipient.pk,
+                getattr(resp, "status_code", None),
+                getattr(resp, "text", "")[:1000],
             )
         except NodeDisabled:
             logger.warning(
-                "Node %s is disabled — skipping distribution for %s.",
+                "ENTRY FANOUT NODE DISABLED: entry=%s recipient=%s node=%s",
+                entry.uuid,
+                recipient.fqid or recipient.pk,
                 node,
-                recipient.fqid,
             )
         except Exception as exc:
-            logger.error(
-                "Failed to distribute entry %s to %s: %s",
+            logger.exception(
+                "ENTRY FANOUT ERROR: entry=%s recipient=%s inbox_path=%s error=%s",
                 entry.uuid,
-                recipient.fqid,
+                recipient.fqid or recipient.pk,
+                inbox_path,
                 exc,
             )
 

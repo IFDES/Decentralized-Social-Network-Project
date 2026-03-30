@@ -81,6 +81,17 @@ def handle_remote_entry_payload(payload: dict):
 
     is_deleted = visibility == Entry.VISIBILITY_DELETED
 
+    print(
+        "REMOTE INGEST:",
+        {
+            "entry_fqid": entry_fqid,
+            "visibility": visibility,
+            "is_deleted": is_deleted,
+            "web": web,
+            "author_fqid": remote_author.fqid,
+        },
+    )
+    
     is_base64_image = (
         content_type in Entry.IMAGE_BASE64_CONTENT_TYPES
         or content_type == Entry.CONTENT_IMAGE_LEGACY
