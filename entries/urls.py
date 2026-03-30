@@ -97,9 +97,19 @@ urlpatterns = [
         name="image-upload-api",
     ),
     path(
+        "api/authors/<uuid:author_id>/images/",
+        views.image_upload_api,
+    ),
+    path(
         "api/authors/<uuid:author_id>/entries",
         views.author_entries_api,
         name="author-entries-api",
+    ),
+    # Accept trailing slash to avoid redirect/auth issues during federation.
+    path(
+        "api/authors/<uuid:author_id>/entries/",
+        views.author_entries_api,
+        name="author-entries-api-slash",
     ),
     path(
         "api/authors/<uuid:author_id>/entries/<uuid:entry_id>/image",
@@ -107,14 +117,29 @@ urlpatterns = [
         name="entry-image-api",
     ),
     path(
+        "api/authors/<uuid:author_id>/entries/<uuid:entry_id>/image/",
+        views.entry_image_api_by_entry_id,
+        name="entry-image-api-slash",
+    ),
+    path(
         "api/authors/<uuid:author_id>/entries/<uuid:entry_id>",
         views.entry_detail_api,
         name="entry-detail-api",
     ),
     path(
+        "api/authors/<uuid:author_id>/entries/<uuid:entry_id>/",
+        views.entry_detail_api,
+        name="entry-detail-api-slash",
+    ),
+    path(
         "api/entries/<path:entry_fqid>/image",
         views.entry_image_api_by_fqid,
         name="entry-image-fqid-api",
+    ),
+    path(
+        "api/entries/<path:entry_fqid>/image/",
+        views.entry_image_api_by_fqid,
+        name="entry-image-fqid-api-slash",
     ),
     path(
         "api/authors/<uuid:author_id>/entries/<uuid:entry_id>/comments",
@@ -138,6 +163,10 @@ urlpatterns = [
         "api/authors/<uuid:author_id>/entries/<uuid:entry_id>/comments/<path:comment_ref>",
         interactions_views.entry_comment_detail_api,
         name="entry-comment-detail-api",
+    ),
+    path(
+        "api/authors/<uuid:author_id>/entries/<uuid:entry_id>/comments/<path:comment_ref>/",
+        interactions_views.entry_comment_detail_api,
     ),
     path(
         "api/authors/<uuid:author_id>/entries/<uuid:entry_id>/likes",
@@ -205,9 +234,17 @@ urlpatterns = [
         name="entry-fqid-comments-api",
     ),
     path(
+        "api/entries/<path:entry_fqid>/comments/",
+        interactions_views.entry_fqid_comments_api,
+    ),
+    path(
         "api/entries/<path:entry_fqid>/likes",
         interactions_views.entry_fqid_likes_api,
         name="entry-fqid-likes-api",
+    ),
+    path(
+        "api/entries/<path:entry_fqid>/likes/",
+        interactions_views.entry_fqid_likes_api,
     ),
     path(
         "api/commented/<path:comment_fqid>",
@@ -215,9 +252,17 @@ urlpatterns = [
         name="commented-fqid-api",
     ),
     path(
+        "api/commented/<path:comment_fqid>/",
+        interactions_views.commented_fqid_api,
+    ),
+    path(
         "api/liked/<path:like_fqid>",
         interactions_views.liked_fqid_api,
         name="liked-fqid-api",
+    ),
+    path(
+        "api/liked/<path:like_fqid>/",
+        interactions_views.liked_fqid_api,
     ),
 ]
 
