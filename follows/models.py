@@ -55,6 +55,7 @@ class FollowRelationship(models.Model):
         max_length=16,
         choices=Status.choices,
         default=Status.PENDING, # if no value then assume pending
+        db_index=True,
     )
     
     # Set once upon creation
