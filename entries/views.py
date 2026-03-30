@@ -175,12 +175,18 @@ def _should_ingest_remote_entry_for_viewer(entry_payload: dict, remote_author: A
     if visibility == Entry.VISIBILITY_PUBLIC:
         return True
 
+    # if visibility == Entry.VISIBILITY_UNLISTED:
+    #     return FollowRelationship.objects.filter(
+    #         follower=viewer,
+    #         followee=remote_author,
+    #         status=FollowRelationship.Status.APPROVED,
+    #     ).exists()
+
     if visibility == Entry.VISIBILITY_UNLISTED:
-        return FollowRelationship.objects.filter(
-            follower=viewer,
-            followee=remote_author,
-            status=FollowRelationship.Status.APPROVED,
-        ).exists()
+    return False
+
+    if visibility == Entry.VISIBILITY_FRIENDS:
+        return False
 
     if visibility == Entry.VISIBILITY_FRIENDS:
         return FollowRelationship.are_friends(viewer, remote_author)
@@ -402,6 +408,18 @@ def _stream_entries_queryset(request: HttpRequest | None = None):
         )
     ).order_by("-updated_at", "-published", "-uuid")
 
+    # return base.filter(
+    #     Q(visibility=Entry.VISIBILITY_PUBLIC)
+    #     | (
+    #         Q(visibility=Entry.VISIBILITY_UNLISTED)
+    #         & Q(author_id__in=following_ids)
+    #     )
+    #     | (
+    #         Q(visibility=Entry.VISIBILITY_FRIENDS)
+    #         & Q(author_id__in=friend_ids)
+    #     )
+    # ).order_by("-updated_at", "-published", "-uuid")
+
 
 # ---------------------------------------------------------------------------
 # HTML views (local browser UI)
@@ -414,7 +432,7 @@ def stream_page(request: HttpRequest) -> HttpResponse:
     current_author = _get_current_author(request)
 
     # Pull remote entries first so they exist locally
-    _sync_remote_entries_for_stream(current_author)
+    # _sync_remote_entries_for_stream(current_author)
 
     entries = list(_stream_entries_queryset(request))
     entry_ids = [e.uuid for e in entries]
@@ -1014,7 +1032,7 @@ def image_upload_api(request: HttpRequest, author_id: UUID) -> HttpResponse:
 @require_http_methods(["GET"])
 def stream_api(request: HttpRequest) -> HttpResponse:
     current_author = _get_current_author(request)
-    _sync_remote_entries_for_stream(current_author)
+    # _sync_remote_entries_for_stream(current_author)
 
     queryset = _stream_entries_queryset(request)
     page_number, size, count, page_items = _paginate_queryset(request, queryset)
