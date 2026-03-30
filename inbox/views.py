@@ -701,37 +701,14 @@ def _remote_entry_allowed_for_recipient(local_author: Author, payload: dict) -> 
     Decide whether a remote entry payload is allowed to be delivered into
     local_author's inbox.
 
-    Rule:
-    - PUBLIC: always allowed (public entries can be delivered to anyone).
-    - UNLISTED: allowed only if local_author follows the remote author
-      with APPROVED status.
-    - FRIENDS: allowed only if local_author and remote author are mutual approved friends.
-    - DELETED: allow if there was previously an approved follow/friend relationship,
-      so deletes can still clean up previously received content.
+    Rule (simplified):
+    - Accept all entry visibilities from remote nodes (PUBLIC/UNLISTED/FRIENDS/DELETED).
+    - Enforce visibility when *displaying* content (stream/detail endpoints), not at inbox ingress.
     """
     author_data = payload.get("author")
     if not isinstance(author_data, dict):
         raise ValueError("Entry payload is missing valid 'author' object.")
 
-    remote_author = upsert_remote_author(author_data)
-    visibility = (payload.get("visibility") or Entry.VISIBILITY_PUBLIC).upper()
-
-    approved_follow = FollowRelationship.objects.filter(
-        follower=local_author,
-        followee=remote_author,
-        status=FollowRelationship.Status.APPROVED,
-    ).exists()
-
-    if visibility == Entry.VISIBILITY_PUBLIC:
-        return True
-
-    if visibility == Entry.VISIBILITY_UNLISTED:
-        return approved_follow
-
-    if visibility == Entry.VISIBILITY_FRIENDS:
-        return FollowRelationship.are_friends(local_author, remote_author)
-
-    if visibility == Entry.VISIBILITY_DELETED:
-        return approved_follow or FollowRelationship.are_friends(local_author, remote_author)
-
-    return False
+    # Still upsert the remote author for consistent DB state even if the entry is hidden later.
+    upsert_remote_author(author_data)
+    return True
