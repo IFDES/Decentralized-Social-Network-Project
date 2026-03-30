@@ -206,7 +206,15 @@ def authors_api(request: HttpRequest):
         github=payload.get("github", ""),
         profile_image=payload.get("profileImage", payload.get("profile_image", "")),
         description=payload.get("description", ""),
+        is_local=True,
     )
+
+    base = request.build_absolute_uri("/").rstrip("/")
+    author.host = base
+    author.fqid = f"{base}/api/authors/{author.uuid}"
+    author.web = f"{base}/authors/{author.uuid}"
+    author.save(update_fields=["host", "fqid", "web"])
+
     AuthorAccount.objects.create(user=user, author=author)
 
     return JsonResponse(
@@ -337,9 +345,19 @@ def signup_page(request: HttpRequest):
                 password=form.cleaned_data["password1"],
                 is_active=False,
             )
+
+            base = request.build_absolute_uri("/").rstrip("/")
+
             author = Author.objects.create(
                 display_name=form.cleaned_data["display_name"],
+                is_local=True,
             )
+
+            author.host = base
+            author.fqid = f"{base}/api/authors/{author.uuid}"
+            author.web = f"{base}/authors/{author.uuid}"
+            author.save(update_fields=["host", "fqid", "web"])
+
             AuthorAccount.objects.create(user=user, author=author)
             return render(request, "registration/signup_pending.html")
     else:
