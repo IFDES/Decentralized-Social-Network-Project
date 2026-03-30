@@ -58,7 +58,13 @@ class FollowRelationship(models.Model):
 
     @property
     def state(self) -> str:
-        return self.STATUS_TO_STATE.get(self.status, "requesting")
+        if self.status == self.Status.PENDING:
+            return "requesting"
+        if self.status == self.Status.APPROVED:
+            return "accepted"
+        if self.status == self.Status.DENIED:
+            return "rejected"
+        return "requesting"
 
     def set_state(self, state: str) -> None:
         if state not in self.STATE_TO_STATUS:
