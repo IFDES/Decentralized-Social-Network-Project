@@ -1,4 +1,5 @@
 import json
+import base64
 
 from datetime import datetime, timezone
 
@@ -357,6 +358,152 @@ class StreamApiTests(TestCase):
         self.assertNotIn(str(own_friends_entry.fqid), returned_ids)
         self.assertNotIn(str(other_unlisted_entry.fqid), returned_ids)
         self.assertIn(str(public_entry.fqid), returned_ids)
+
+    def test_stream_includes_remote_public_entries_without_follow(self):
+        """
+        Remote authors' PUBLIC entries should show in stream even when the
+        viewer isn't following them.
+        """
+        remote_author = Author.objects.create(display_name="Remote", is_local=False)
+        remote_entry = Entry.objects.create(
+            author=remote_author,
+            title="Remote public",
+            content="Visible one",
+            visibility=Entry.VISIBILITY_PUBLIC,
+        )
+
+        self.client.login(username="stream_owner", password="passA12345")
+        response = self.client.get(reverse("entries:stream-api"))
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+
+        returned_ids = [item["id"] for item in payload["src"]]
+        self.assertIn(str(remote_entry.fqid), returned_ids)
+
+    def test_stream_inlines_base64_for_image_entries(self):
+        """
+        For pull-based interoperability, image entries should include base64 bytes
+        in `content` on GET stream responses.
+        """
+        from django.core.files.base import ContentFile
+        from entries.models import HostedImage
+
+        # Ensure we're authenticated so stream returns entries deterministically
+        self.client.login(username="stream_owner", password="passA12345")
+
+        png_base64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+kbXQAAAAASUVORK5CYII="
+        png_bytes = base64.b64decode(png_base64)
+
+        entry = Entry.objects.create(
+            author=self.author,
+            title="Image",
+            content="",
+            content_type=Entry.CONTENT_IMAGE,
+            visibility=Entry.VISIBILITY_PUBLIC,
+        )
+        HostedImage.objects.create(
+            uploaded_by=self.author,
+            entry=entry,
+            visibility=Entry.VISIBILITY_PUBLIC,
+            file=ContentFile(png_bytes, name="t.png"),
+            data_base64=png_base64,
+            content_type="image/png",
+        )
+
+        resp = self.client.get(reverse("entries:stream-api"))
+        self.assertEqual(resp.status_code, 200)
+        payload = resp.json()
+        items = payload.get("src") or []
+        self.assertGreaterEqual(len(items), 1)
+
+        # Find our entry.
+        found = None
+        for it in items:
+            if it.get("id") == str(entry.fqid):
+                found = it
+                break
+        self.assertIsNotNone(found)
+        self.assertEqual(found.get("contentType"), "Image")
+        self.assertEqual(found.get("content"), png_base64)
+
+    def test_stream_pulls_unlisted_for_followed_remote_author(self):
+        """
+        If the viewer follows a remote author (APPROVED), remote UNLISTED entries
+        should be pulled/ingested and appear in stream.
+        """
+        from unittest.mock import patch
+        from config.core.models import RemoteNode
+
+        remote_author = Author.objects.create(
+            display_name="Remote Author",
+            fqid="https://remote.example/api/authors/ra-1",
+            host="https://remote.example/api/",
+            web="https://remote.example/authors/ra-1",
+            is_local=False,
+        )
+        RemoteNode.objects.create(
+            display_name="Remote",
+            base_url="https://remote.example",
+            outgoing_username="us",
+            outgoing_password="pw",
+        )
+        FollowRelationship.objects.create(
+            follower=self.author,  # stream_owner's author
+            followee=remote_author,
+            status=FollowRelationship.Status.APPROVED,
+        )
+
+        self.client.login(username="stream_owner", password="passA12345")
+
+        remote_unlisted_entry_fqid = "https://remote.example/api/authors/ra-1/entries/e-unl-1"
+        remote_public_entry_fqid = "https://remote.example/api/authors/ra-1/entries/e-pub-1"
+
+        remote_author_json = {
+            "type": "author",
+            "id": remote_author.fqid,
+            "host": remote_author.host,
+            "displayName": remote_author.display_name,
+            "web": remote_author.web,
+            "github": "",
+            "profileImage": "",
+        }
+
+        remote_entries_payload = {
+            "type": "entries",
+            "page_number": 1,
+            "size": 10,
+            "count": 2,
+            "src": [
+                {
+                    "type": "entry",
+                    "id": remote_public_entry_fqid,
+                    "title": "Remote public",
+                    "content": "pub",
+                    "contentType": "text/plain",
+                    "visibility": "PUBLIC",
+                    "author": remote_author_json,
+                    "published": "2026-03-30T00:00:00+00:00",
+                },
+                {
+                    "type": "entry",
+                    "id": remote_unlisted_entry_fqid,
+                    "title": "Remote unlisted",
+                    "content": "unl",
+                    "contentType": "text/plain",
+                    "visibility": "UNLISTED",
+                    "author": remote_author_json,
+                    "published": "2026-03-30T00:00:01+00:00",
+                },
+            ],
+        }
+
+        with patch("entries.views._get_json_basic_auth", return_value=(200, remote_entries_payload)):
+            resp = self.client.get(reverse("entries:stream-api"))
+            self.assertEqual(resp.status_code, 200)
+            data = resp.json()
+            returned_ids = [it["id"] for it in data.get("src") or []]
+            self.assertIn(remote_public_entry_fqid, returned_ids)
+            self.assertIn(remote_unlisted_entry_fqid, returned_ids)
 
     def test_stream_returns_latest_edited_version_once(self):
         entry = Entry.objects.create(
@@ -1133,9 +1280,10 @@ class EntryDistributionTests(TestCase):
         )
 
         with patch("entries.distribution.make_node_request") as mock_req:
+            mock_req.return_value = MagicMock(status_code=201)
             distribute_entry_to_remote_followers(entry)
 
-        mock_req.assert_not_called()
+        mock_req.assert_called_once()
 
     def test_friends_entry_only_distributed_to_friends_not_followers(self):
         from unittest.mock import patch, MagicMock
@@ -1193,3 +1341,44 @@ class EntryDistributionTests(TestCase):
             distribute_entry_to_remote_followers(entry)
 
         mock_req.assert_called_once()
+
+    def test_image_entry_distributed_with_base64_content(self):
+        """
+        Image entries should be pushed to remote inboxes with base64 bytes in `content`.
+        """
+        from unittest.mock import patch, MagicMock
+        from django.core.files.base import ContentFile
+        from entries.distribution import distribute_entry_to_remote_followers
+        from entries.models import HostedImage
+
+        # 1x1 transparent PNG (base64)
+        png_base64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+kbXQAAAAASUVORK5CYII="
+        png_bytes = base64.b64decode(png_base64)
+
+        entry = Entry.objects.create(
+            author=self.local_author,
+            title="Img",
+            content="",
+            content_type=Entry.CONTENT_IMAGE,
+            visibility=Entry.VISIBILITY_PUBLIC,
+        )
+
+        HostedImage.objects.create(
+            uploaded_by=self.local_author,
+            entry=entry,
+            visibility=Entry.VISIBILITY_PUBLIC,
+            file=ContentFile(png_bytes, name="t.png"),
+            data_base64=png_base64,
+            content_type="image/png",
+        )
+
+        with patch("entries.distribution.make_node_request") as mock_req:
+            mock_req.return_value = MagicMock(status_code=201)
+            distribute_entry_to_remote_followers(entry)
+
+        mock_req.assert_called_once()
+        _, kwargs = mock_req.call_args
+        payload = kwargs["json"]
+        self.assertEqual(payload["type"], "entry")
+        self.assertEqual(payload["contentType"], "Image")
+        self.assertEqual(payload["content"], png_base64)

@@ -30,7 +30,7 @@
                 {{ c.like_count }}
               </span>
             {% endif %}
-            {% if current_author and c.author_id == current_author.id %}
+            {% if current_author and c.author_id == current_author.pk %}
               <form action="{% url 'entries:comment-delete' author.uuid entry.uuid c.uuid %}" method="post" style="display:inline; margin-left:8px;">
                 {% csrf_token %}
                 <button type="submit">Delete</button>

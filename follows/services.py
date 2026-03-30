@@ -6,6 +6,11 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
+<<<<<<< plswork
+from authors.models import Author
+from authors.services import normalize_author_fqid
+from config.core.models import RemoteNode
+=======
 from .models import FollowRelationship
 from authors.models import Author
 from authors.services import normalize_author_fqid
@@ -13,6 +18,7 @@ from config.core.models import RemoteNode
 from config.core.serializers import author_to_json
 from entries.remote_ingest import upsert_remote_author
 
+>>>>>>> production
 
 
 def _host_from_author_fqid(author_fqid: str) -> str:
@@ -20,6 +26,22 @@ def _host_from_author_fqid(author_fqid: str) -> str:
     parsed = urlparse(author_fqid)
     return f"{parsed.scheme}://{parsed.netloc}".rstrip("/")
 
+<<<<<<< plswork
+
+def _api_host_from_author_fqid(author_fqid: str) -> str:
+    author_fqid = normalize_author_fqid(author_fqid)
+    parsed = urlparse(author_fqid)
+    return f"{parsed.scheme}://{parsed.netloc}/api/"
+
+
+def _get_author_by_fqid_or_400(author_fqid: str) -> Author:
+    author_fqid = normalize_author_fqid(author_fqid)
+    try:
+        return Author.objects.get(fqid=author_fqid, is_deleted=False)
+    except Author.DoesNotExist:
+        raise ValueError("Author is not known locally yet.")
+
+=======
 def _get_author_by_fqid_or_400(author_fqid: str) -> Author:
     author_fqid = normalize_author_fqid(author_fqid)
     try:
@@ -60,6 +82,7 @@ def follow_state_update_to_json(rel: FollowRelationship) -> dict:
         "actor": author_to_json(rel.followee),
         "object": author_to_json(rel.follower),
     }
+>>>>>>> production
 
 def web_url_from_author_fqid(author_fqid: str) -> str:
     author_fqid = normalize_author_fqid(author_fqid)
@@ -90,8 +113,12 @@ def get_remote_node_for_author_fqid(author_fqid: str) -> RemoteNode:
 
 def fetch_remote_author_json(author_fqid: str, timeout: int = 10) -> dict:
     """
+<<<<<<< plswork
+    Fetch remote author JSON using configured outgoing credentials.
+=======
     Fetch remote author JSON using the configured outgoing credentials
     for that remote node.
+>>>>>>> production
     """
     author_fqid = normalize_author_fqid(author_fqid)
     remote_node = get_remote_node_for_author_fqid(author_fqid)
@@ -134,6 +161,13 @@ def fetch_remote_author_json(author_fqid: str, timeout: int = 10) -> dict:
 
 def get_or_fetch_author_by_fqid(author_fqid: str) -> Author:
     """
+<<<<<<< plswork
+    Return a local Author row for the given canonical author FQID.
+    If unknown and remote, try to fetch and upsert it.
+    """
+    from django.conf import settings
+    from entries.remote_ingest import upsert_remote_author
+=======
     Return an Author row for the given FQID.
 
     Behavior:
@@ -144,6 +178,7 @@ def get_or_fetch_author_by_fqid(author_fqid: str) -> Author:
     - if fetch fails, return/create a minimal stub row
     """
     from django.conf import settings
+>>>>>>> production
 
     author_fqid = normalize_author_fqid(author_fqid)
     placeholder_name = display_name_from_fqid(author_fqid)
@@ -181,9 +216,14 @@ def get_or_fetch_author_by_fqid(author_fqid: str) -> Author:
             author_data["web"] = web_url_from_author_fqid(author_fqid)
 
         if not author_data.get("host"):
+<<<<<<< plswork
+            author_data["host"] = _api_host_from_author_fqid(author_fqid)
+
+=======
             author_data["host"] = node_base_url_from_author_fqid(author_fqid)
 
         from entries.remote_ingest import upsert_remote_author
+>>>>>>> production
         return upsert_remote_author(author_data)
 
     except Exception:
@@ -192,7 +232,11 @@ def get_or_fetch_author_by_fqid(author_fqid: str) -> Author:
 
         return Author.objects.create(
             fqid=author_fqid,
+<<<<<<< plswork
+            host=_host_from_author_fqid(author_fqid),
+=======
             host=node_base_url_from_author_fqid(author_fqid),
+>>>>>>> production
             web=web_url_from_author_fqid(author_fqid),
             display_name=placeholder_name,
             is_local=False,

@@ -142,6 +142,69 @@ class InboxEntryTests(_InboxTestMixin, TestCase):
         self.assertEqual(resp.status_code, 400)
 
 
+class InboxImageEntryTests(_InboxTestMixin, TestCase):
+    def setUp(self):
+        self._set_up_inbox()
+
+        # Create a remote author and ensure the local inbox owner has an approved
+        # follow so PUBLIC inbox entries are accepted by _remote_entry_allowed_for_recipient.
+        self.remote_author_data = {
+            "type": "author",
+            "id": "https://remote.example/api/authors/remote-image-author-1",
+            "host": "https://remote.example/api/",
+            "displayName": "Remote Image Author",
+            "web": "https://remote.example/authors/remote-image-author-1",
+            "github": "",
+            "profileImage": "",
+        }
+        self.remote_author = Author.objects.create(
+            display_name=self.remote_author_data["displayName"],
+            fqid=self.remote_author_data["id"],
+            host=self.remote_author_data["host"],
+            web=self.remote_author_data["web"],
+            is_local=False,
+        )
+        FollowRelationship.objects.create(
+            follower=self.local_author,
+            followee=self.remote_author,
+            status=FollowRelationship.Status.APPROVED,
+        )
+
+    def test_image_entry_payload_materializes_hosted_image_and_serves_binary(self):
+        # 1x1 transparent PNG (base64)
+        png_base64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+kbXQAAAAASUVORK5CYII="
+
+        payload = {
+            "type": "entry",
+            "id": "https://remote.example/api/authors/remote-image-author-1/entries/img-1",
+            "title": "Image",
+            "description": "",
+            "contentType": "Image",
+            "content": png_base64,
+            "visibility": "PUBLIC",
+            "web": "https://remote.example/authors/remote-image-author-1/entries/img-1",
+            "author": self.remote_author_data,
+        }
+
+        resp = self._post_inbox(payload)
+        self.assertIn(resp.status_code, (200, 201))
+
+        entry = Entry.objects.get(fqid=payload["id"])
+        self.assertEqual(entry.content_type, "Image")
+        self.assertEqual(entry.content, "")
+        self.assertGreaterEqual(entry.hosted_images.count(), 1)
+
+        # Public image endpoint: should return image bytes.
+        hosted = entry.hosted_images.first()
+        self.assertIsNotNone(hosted)
+
+        self.client.force_login(self.node_user)
+        img_resp = self.client.get(
+            f"/api/authors/{self.remote_author.uuid}/entries/{entry.uuid}/image"
+        )
+        self.assertEqual(getattr(img_resp, "status_code", None), 200)
+
+
 class InboxLikeEntryTests(_InboxTestMixin, TestCase):
     def setUp(self):
         self._set_up_inbox()
@@ -397,6 +460,65 @@ class InboxRemoteMutualFollowFriendshipTests(_InboxTestMixin, TestCase):
         outgoing.refresh_from_db()
         self.assertEqual(incoming.status, FollowRelationship.Status.APPROVED)
         self.assertEqual(outgoing.status, FollowRelationship.Status.APPROVED)
+
+
+class InboxFollowStateUpdateTests(_InboxTestMixin, TestCase):
+    def setUp(self):
+        self._set_up_inbox()
+
+    def test_rejected_follow_update_does_not_downgrade_requester(self):
+        """
+        Federation rule:
+        If the follow request is rejected, the requester should still treat the
+        relationship as accepted (it will simply stop receiving entries because
+        the remote node won't distribute).
+        """
+        remote_actor_data = {
+            "type": "author",
+            "id": "https://remote.example/api/authors/remote-actor-rejected",
+            "host": "https://remote.example/api/",
+            "displayName": "Remote Rejected Actor",
+            "web": "https://remote.example/authors/remote-actor-rejected",
+            "github": "",
+            "profileImage": "",
+        }
+        remote_actor = Author.objects.create(
+            display_name="Remote Rejected Actor",
+            fqid=remote_actor_data["id"],
+            host=remote_actor_data["host"],
+            web=remote_actor_data["web"],
+            is_local=False,
+        )
+
+        FollowRelationship.objects.create(
+            follower=self.local_author,
+            followee=remote_actor,
+            status=FollowRelationship.Status.APPROVED,
+        )
+
+        payload = {
+            "type": "follow",
+            "state": "rejected",
+            "actor": remote_actor_data,
+            "object": {
+                "type": "author",
+                "id": self.local_author.fqid,
+                "host": "http://testserver/api/",
+                "displayName": self.local_author.display_name,
+                "web": self.local_author.web,
+                "github": "",
+                "profileImage": "",
+            },
+        }
+
+        resp = self._post_inbox(payload)
+        self.assertEqual(resp.status_code, 201)
+
+        rel = FollowRelationship.objects.get(
+            follower=self.local_author,
+            followee=remote_actor,
+        )
+        self.assertEqual(rel.status, FollowRelationship.Status.APPROVED)
 
 
 class InboxCommentFederationTests(_InboxTestMixin, TestCase):

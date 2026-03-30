@@ -1,5 +1,6 @@
 import json
 import mimetypes
+import re
 from datetime import datetime, timezone
 from uuid import UUID
 
@@ -19,9 +20,11 @@ from django.urls import reverse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 from django.http import FileResponse
+from django.core.files.base import ContentFile
 
 from authors.models import Author, AuthorAccount
 from config.core.permissions import user_matches_author_uuid
+from config.core.serializers import author_to_json
 from follows.models import FollowRelationship
 from interactions.models import Comment, CommentLike, EntryLike
 from interactions.serializers import comments_list_json, likes_list_json
@@ -44,6 +47,61 @@ from .visibility import (
     get_visible_comments_queryset,
     is_node_admin,
 )
+from .remote_ingest import handle_remote_entry_payload
+
+import base64
+import binascii
+from urllib.request import Request, urlopen
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlparse, urlencode
+
+from config.core.models import RemoteNode
+
+
+def _node_base_url_from_author_fqid(author_fqid: str) -> str:
+    parsed = urlparse(author_fqid)
+    return f"{parsed.scheme}://{parsed.netloc}".rstrip("/")
+
+
+def _get_remote_node_for_author(author: Author) -> RemoteNode:
+    if not author.fqid:
+        raise ValueError("Remote author is missing fqid.")
+    base_url = _node_base_url_from_author_fqid(author.fqid)
+    return RemoteNode.objects.get(base_url=base_url, is_active=True)
+
+
+def _remote_entries_url_for_author(author: Author) -> str:
+    if not author.fqid:
+        raise ValueError("Remote author is missing fqid.")
+    return f"{author.fqid.rstrip('/')}/entries"
+
+
+def _get_json_basic_auth(url: str, username: str, password: str, timeout: int = 10):
+    creds = f"{username}:{password}".encode("utf-8")
+    auth_header = base64.b64encode(creds).decode("ascii")
+
+    request = Request(
+        url=url,
+        method="GET",
+        headers={
+            "Accept": "application/json",
+            "Authorization": f"Basic {auth_header}",
+        },
+    )
+
+    try:
+        with urlopen(request, timeout=timeout) as response:
+            raw = response.read().decode("utf-8", errors="replace")
+            return response.status, json.loads(raw)
+    except HTTPError as exc:
+        raw = exc.read().decode("utf-8", errors="replace")
+        try:
+            parsed = json.loads(raw) if raw else {}
+        except json.JSONDecodeError:
+            parsed = {"raw": raw}
+        return exc.code, parsed
+    except URLError as exc:
+        raise ConnectionError(f"Could not connect to remote entries endpoint: {exc}") from exc
 
 # This file is assisted by CoPilot on 14 March 2026 22:10 with the prompt
 # "Help me fix these errors "ERROR MESSAGES" in the views.py file for image hosting in entries in Django"
@@ -65,23 +123,122 @@ def _build_image_urls_from_request(
     for f in request.FILES.getlist("image_files") or []:
         if f.content_type in allowed:
             try:
+                # Persist bytes in DB as fallback for ephemeral filesystems.
+                try:
+                    raw = f.read()
+                    f.seek(0)
+                    data_base64 = base64.b64encode(raw).decode("ascii")
+                except Exception:
+                    data_base64 = ""
                 HostedImage.objects.create(
                     uploaded_by=author,
                     file=f,
                     visibility=visibility,
                     entry=entry,
+                    data_base64=data_base64,
+                    content_type=getattr(f, "content_type", "") or "",
                 )
-            except Exception:
-                pass
+            except Exception as exc:
+                print(f"Failed ingesting remote entry: {exc}")
+                continue
 
     text = (request.POST.get("image_urls_text") or "").strip()
     for part in text.replace(",", "\n").splitlines():
         part = part.strip()
-        if part and (part.startswith("http://") or part.startswith("https://")):
-            # For external URLs, we don't create HostedImage; clients can embed
-            # them directly in markdown content.
+        if not part:
+            continue
+        m = re.search(r"/api/media/images/([0-9a-fA-F-]{36})/?$", part)
+        if m:
+            try:
+                hosted = HostedImage.objects.get(pk=m.group(1))
+                if hosted.entry_id != (entry.pk if entry else None):
+                    hosted.entry = entry
+                    hosted.save(update_fields=["entry"])
+            except HostedImage.DoesNotExist:
+                pass
+
+
+def _reconcile_hosted_images(request: HttpRequest, entry: Entry) -> None:
+    """Unlink HostedImage objects whose URLs were removed from the textarea."""
+    submitted_urls: set[str] = set()
+    text = (request.POST.get("image_urls_text") or "").strip()
+    for line in text.replace(",", "\n").splitlines():
+        line = line.strip()
+        if line:
+            submitted_urls.add(line)
+
+    for hosted in entry.hosted_images.all():
+        url = _hosted_image_canonical_url(request, hosted)
+        if url not in submitted_urls:
+            hosted.entry = None
+            hosted.save(update_fields=["entry"])
+
+
+def _should_ingest_remote_entry_for_viewer(entry_payload: dict, remote_author: Author, viewer: Author | None) -> bool:
+    """
+    Decide whether to ingest a pulled remote entry into our DB.
+
+    Current policy: ingest anything that looks like a dict; visibility is
+    enforced at read time (stream/detail), not at pull time.
+    """
+    return isinstance(entry_payload, dict)
+
+def _sync_remote_entries_for_stream(viewer: Author | None):
+    """
+    Sync remote entries for the stream.
+
+    Requirement (relaxed):
+    - Ingest ALL remote entries we can pull (PUBLIC/UNLISTED/FRIENDS/DELETED).
+      Our own visibility rules (stream/detail) decide what is actually shown
+      to local viewers; the pull layer should not drop anything.
+    """
+    if viewer is None:
+        return
+
+    from config.core.models import RemoteNode
+
+    remote_nodes = RemoteNode.objects.filter(is_active=True)
+    if not remote_nodes.exists():
+        return
+
+    for remote_node in remote_nodes:
+        try:
+            remote_authors = Author.objects.filter(
+                is_local=False,
+                is_deleted=False,
+                fqid__startswith=remote_node.base_url.rstrip("/"),
+            )
+        except Exception:
             continue
 
+        for remote_author in remote_authors:
+            try:
+                url = _remote_entries_url_for_author(remote_author)
+
+                status_code, data = _get_json_basic_auth(
+                    url=url,
+                    username=remote_node.outgoing_username,
+                    password=remote_node.outgoing_password,
+                )
+
+                if status_code < 200 or status_code >= 300:
+                    continue
+
+                items = data.get("src") or data.get("items") or []
+                if not isinstance(items, list):
+                    continue
+
+                for payload in items:
+                    if not isinstance(payload, dict):
+                        continue
+                    if not _should_ingest_remote_entry_for_viewer(payload, remote_author, viewer):
+                        continue
+                    try:
+                        handle_remote_entry_payload(payload)
+                    except Exception:
+                        continue
+            except Exception:
+                continue
 
 # This file is assisted by CoPilot on 27 Feb 2026 02:10 with the prompt
 # "Help me create a views.py file for entries in Django"
@@ -131,8 +288,6 @@ def _entry_to_json(request: HttpRequest, entry: Entry) -> dict:
     entry_id = _build_entry_id(author, entry)
     web = _build_entry_web(author, entry)
 
-    base = settings.SERVICE_BASE_URL.rstrip("/")
-
     comments_queryset = get_visible_comments_queryset(
         entry,
         viewer,
@@ -151,34 +306,41 @@ def _entry_to_json(request: HttpRequest, entry: Entry) -> dict:
     likes_page = list(likes_queryset[:5])
     likes_payload = likes_list_json(entry, 1, 5, likes_count, likes_page)
 
-    image_urls = [
-        _hosted_image_canonical_url(request, hosted)
-        for hosted in entry.hosted_images.all()
-    ]
+    description = getattr(entry, "description", "") or ""
+    content_type = entry.content_type
+    content = entry.content
+
+    # For interoperability: inline base64 bytes for image entries in GET responses.
+    # Remote nodes that pull entries (instead of relying on inbox pushes) can still
+    # reconstruct the image without needing to hit the /image endpoint.
+    if _entry_content_type_is_image(content_type):
+        hosted = entry.hosted_images.first()
+        if hosted:
+            if getattr(hosted, "data_base64", ""):
+                content = hosted.data_base64
+            elif hosted.file:
+                try:
+                    raw = hosted.file.read()
+                    content = base64.b64encode(raw).decode("ascii")
+                except (FileNotFoundError, OSError):
+                    content = ""
+        description = ""
+        content_type = Entry.CONTENT_IMAGE
 
     return {
         "type": "entry",
         "title": entry.title,
         "id": entry_id,
         "web": web,
-        "contentType": entry.content_type,
-        "content": entry.content,
-        "author": {
-            "type": "author",
-            "id": author.fqid
-            or f"{base}/api/authors/{author.uuid}",
-            "host": author.host or f"{base}/api/",
-            "displayName": author.display_name,
-            "web": author.web or f"{base}/authors/{author.uuid}",
-            "github": author.github,
-            "profileImage": author.profile_image,
-        },
+        "description": description,
+        "contentType": content_type,
+        "content": content,
+        "author": author_to_json(author),
         "comments": comments_payload,
         "likes": likes_payload,
         "published": entry.published.astimezone(timezone.utc).isoformat(),
         "updated_at": entry.updated_at.astimezone(timezone.utc).isoformat(),
         "visibility": entry.visibility,
-        "image_urls": image_urls,
     }
 
 
@@ -192,63 +354,113 @@ def _can_view_entry(entry: Entry, viewer: Author | None) -> bool:
 def get_profile_entry_visibilities(viewer, author) -> list:
     if not author:
         return [Entry.VISIBILITY_PUBLIC]
+
     if viewer and viewer.uuid == author.uuid:
         return [
             Entry.VISIBILITY_PUBLIC,
             Entry.VISIBILITY_FRIENDS,
             Entry.VISIBILITY_UNLISTED,
         ]
+
     if viewer and FollowRelationship.are_friends(viewer, author):
         return [
             Entry.VISIBILITY_PUBLIC,
             Entry.VISIBILITY_FRIENDS,
             Entry.VISIBILITY_UNLISTED,
         ]
-    if viewer and FollowRelationship.objects.filter(
-        follower=viewer,
-        followee=author,
-        status=FollowRelationship.Status.APPROVED,
-    ).exists():
+
+    approved_follow = (
+        viewer
+        and FollowRelationship.objects.filter(
+            follower=viewer,
+            followee=author,
+            status=FollowRelationship.Status.APPROVED,
+        ).exists()
+    )
+
+    if author.is_local:
+        if approved_follow:
+            return [Entry.VISIBILITY_PUBLIC, Entry.VISIBILITY_UNLISTED]
+        return [Entry.VISIBILITY_PUBLIC]
+
+    # Remote author: PUBLIC is visible by default; UNLISTED requires approved follow.
+    if approved_follow:
         return [Entry.VISIBILITY_PUBLIC, Entry.VISIBILITY_UNLISTED]
     return [Entry.VISIBILITY_PUBLIC]
 
 
 def _stream_entries_queryset(request: HttpRequest | None = None):
     """
-    Canonical stream queryset: public entries for anonymous;
-    for authenticated authors, also include unlisted from followed authors
-    and friends-only from friends.
+    Canonical stream queryset:
+    - anonymous:
+        * local PUBLIC only
+    - authenticated:
+        * local PUBLIC from local authors
+        * remote PUBLIC/UNLISTED only from APPROVED followees
+        * local UNLISTED only from APPROVED followees
+        * FRIENDS only from mutual APPROVED follows
+    - never show deleted entries/authors
     """
     base = (
-        Entry.objects.filter(is_deleted=False, deleted_at__isnull=True)
+        Entry.objects.filter(
+            is_deleted=False,
+            deleted_at__isnull=True,
+            author__is_deleted=False,
+        )
         .exclude(visibility=Entry.VISIBILITY_DELETED)
         .select_related("author")
     )
+
     viewer = _get_current_author(request) if request else None
     if not viewer:
-        return base.filter(visibility=Entry.VISIBILITY_PUBLIC).order_by(
-            "-updated_at", "-published", "-uuid"
-        )
-    # Friends: authors with mutual APPROVED follow
+        return base.filter(
+            visibility=Entry.VISIBILITY_PUBLIC,
+            author__is_local=True,
+        ).order_by("-updated_at", "-published", "-uuid")
+
     friend_ids = set(
         FollowRelationship.friends_of(viewer).values_list("uuid", flat=True)
     )
-    # Following: authors this viewer follows (APPROVED)
     following_ids = set(
         FollowRelationship.objects.filter(
-            follower=viewer, status=FollowRelationship.Status.APPROVED
+            follower=viewer,
+            status=FollowRelationship.Status.APPROVED,
+            followee__is_deleted=False,
         ).values_list("followee_id", flat=True)
     )
-    # Show: PUBLIC (all) OR UNLISTED (from followed) OR FRIENDS (from friends)
+
     return base.filter(
-        Q(visibility=Entry.VISIBILITY_PUBLIC)
-        | (
-            Q(visibility=Entry.VISIBILITY_UNLISTED)
-            & Q(author_id__in=following_ids)
+        # local public stays public
+        (
+            Q(author__is_local=True) &
+            Q(visibility=Entry.VISIBILITY_PUBLIC)
         )
-        | (
-            Q(visibility=Entry.VISIBILITY_FRIENDS)
-            & Q(author_id__in=friend_ids)
+        |
+        # local unlisted only if approved follow
+        (
+            Q(author__is_local=True) &
+            Q(visibility=Entry.VISIBILITY_UNLISTED) &
+            Q(author_id__in=following_ids)
+        )
+        |
+        # remote public: visible even when viewer isn't following the author
+        (
+            Q(author__is_local=False) &
+            Q(visibility=Entry.VISIBILITY_PUBLIC) &
+            Q(author_id__isnull=False)
+        )
+        |
+        # remote unlisted also requires approved follow
+        (
+            Q(author__is_local=False) &
+            Q(visibility=Entry.VISIBILITY_UNLISTED) &
+            Q(author_id__in=following_ids)
+        )
+        |
+        # friends-only still requires mutual approved follow
+        (
+            Q(visibility=Entry.VISIBILITY_FRIENDS) &
+            Q(author_id__in=friend_ids)
         )
     ).order_by("-updated_at", "-published", "-uuid")
 
@@ -262,8 +474,13 @@ def _stream_entries_queryset(request: HttpRequest | None = None):
 @require_http_methods(["GET"])
 def stream_page(request: HttpRequest) -> HttpResponse:
     current_author = _get_current_author(request)
+
+    # Pull remote entries first so they exist locally
+    _sync_remote_entries_for_stream(current_author)
+
     entries = list(_stream_entries_queryset(request))
     entry_ids = [e.uuid for e in entries]
+
     like_counts = dict(
         EntryLike.objects.filter(entry_id__in=entry_ids)
         .values("entry_id")
@@ -276,17 +493,19 @@ def stream_page(request: HttpRequest) -> HttpResponse:
         .annotate(n=Count("uuid"))
         .values_list("entry_id", "n")
     )
+
+    liked_ids = set()
     if current_author:
         liked_ids = set(
             EntryLike.objects.filter(author=current_author, entry_id__in=entry_ids)
             .values_list("entry_id", flat=True)
         )
-    else:
-        liked_ids = set()
+
     for e in entries:
         e.like_count = like_counts.get(e.uuid, 0)
         e.comment_count = comment_counts.get(e.uuid, 0)
         e.current_user_has_liked = e.uuid in liked_ids
+
     authors = list(Author.objects.filter(is_deleted=False).order_by("display_name"))
     return render(
         request,
@@ -580,13 +799,14 @@ def comment_delete_page(
     if not current_author:
         return HttpResponseBadRequest("Unable to determine comment author.")
 
-    visible_comments = get_visible_comments_queryset(
-        entry,
-        current_author,
-        is_admin=_is_node_admin(request),
+    # Resolve by entry + id first; do not gate deletes on comment *visibility* to the
+    # viewer (e.g. after unfollow, friends-only threads may hide the comment from the
+    # author in listings even though they still own it).
+    comment = get_object_or_404(
+        Comment.objects.filter(entry=entry).select_related("author", "entry"),
+        pk=comment_id,
     )
-    comment = get_object_or_404(visible_comments, pk=comment_id)
-    if comment.author_id != current_author.id:
+    if comment.author_id != current_author.pk:
         return HttpResponseForbidden("Only the comment author may delete this comment.")
 
     distribute_comment_delete_to_remote(comment)
@@ -613,6 +833,23 @@ def entry_create_page(request: HttpRequest, author_id: UUID) -> HttpResponse:
                 visibility=entry.visibility,
                 entry=entry,
             )
+
+            # If this is an image entry, clear stored text fields and rely on
+            # HostedImage for rendering/federation. The form disables these
+            # inputs for image entries.
+            if (
+                entry.content_type == Entry.CONTENT_IMAGE_LEGACY
+                or entry.content_type in Entry.IMAGE_BASE64_CONTENT_TYPES
+                or (isinstance(entry.content_type, str) and entry.content_type.startswith("image/"))
+            ):
+                hosted = entry.hosted_images.first()
+                if hosted is None:
+                    return HttpResponseBadRequest("Image entries require at least one image.")
+                # Normalize all image entries to a single federation/API value.
+                entry.content_type = Entry.CONTENT_IMAGE
+                entry.description = ""
+                entry.content = ""
+                entry.save(update_fields=["content_type", "description", "content"])
             entry.save(update_fields=["updated_at"])
 
             # Fan out to remote followers / friends
@@ -652,15 +889,30 @@ def entry_edit_page(
         form = EntryForm(request.POST, request.FILES, instance=entry)
         if form.is_valid():
             entry = form.save(commit=False)
-            entry.save() # Redundant?
+            entry.save()
 
+            _reconcile_hosted_images(request, entry)
             _build_image_urls_from_request(
                 request,
                 author,
                 visibility=entry.visibility,
                 entry=entry,
             )
+
+            if (
+                entry.content_type == Entry.CONTENT_IMAGE_LEGACY
+                or entry.content_type in Entry.IMAGE_BASE64_CONTENT_TYPES
+                or (isinstance(entry.content_type, str) and entry.content_type.startswith("image/"))
+            ):
+                hosted = entry.hosted_images.first()
+                if hosted is None:
+                    return HttpResponseBadRequest("Image entries require at least one image.")
+                entry.content_type = Entry.CONTENT_IMAGE
+                entry.description = ""
+                entry.content = ""
+                entry.save(update_fields=["content_type", "description", "content"])
             entry.save(update_fields=["updated_at"])
+            distribute_entry_to_remote_followers(entry)
             return redirect("entries:entry-detail", author_id=author.uuid, entry_id=entry.uuid)
     else:
         form = EntryForm(instance=entry)
@@ -759,25 +1011,142 @@ def serve_hosted_image(request: HttpRequest, image_id: UUID) -> HttpResponse:
 
         # PUBLIC and UNLISTED are allowed by direct link
 
-    if not hosted.file:
-        return HttpResponseBadRequest("Image file missing.")
+    # Prefer serving from disk when available.
+    if hosted.file:
+        try:
+            f = hosted.file.open("rb")
+            content_type, _ = mimetypes.guess_type(hosted.file.name)
+            if not content_type:
+                content_type = hosted.content_type or "application/octet-stream"
+
+            response = FileResponse(
+                f,
+                as_attachment=False,
+                filename=hosted.file.name.split("/")[-1],
+            )
+            response["Content-Type"] = content_type
+            return response
+        except (FileNotFoundError, OSError):
+            # Fall through to DB-backed bytes if present.
+            pass
+
+    # Fallback: serve bytes stored in DB (useful on ephemeral filesystems like Heroku).
+    if hosted.data_base64:
+        try:
+            raw = base64.b64decode(hosted.data_base64)
+        except (binascii.Error, ValueError):
+            return HttpResponseBadRequest("Stored image data is corrupted.")
+
+        content_type = hosted.content_type or "application/octet-stream"
+        return HttpResponse(raw, content_type=content_type)
+
+    return HttpResponseBadRequest("Image data missing.")
+
+
+def _entry_content_type_is_image(content_type: str | None) -> bool:
+    if not content_type:
+        return False
+    return (
+        content_type == Entry.CONTENT_IMAGE_LEGACY
+        or content_type in Entry.IMAGE_BASE64_CONTENT_TYPES
+        or content_type.startswith("image/")
+        or content_type == Entry.CONTENT_IMAGE
+    )
+
+
+def _materialize_base64_image_entry(entry: Entry, uploaded_by: Author) -> None:
+    """
+    Decode `entry.content` (base64) into HostedImage and clear stored text fields.
+    Used by local API create/update when the client sends base64 image entries.
+    """
+    if not entry.content:
+        return
+
+    if not _entry_content_type_is_image(entry.content_type):
+        return
 
     try:
-        f = hosted.file.open("rb")
-    except (FileNotFoundError, OSError):
-        return HttpResponseBadRequest("Image file not found on disk.")
+        image_data = base64.b64decode(entry.content)
+    except Exception as exc:
+        raise ValueError(f"Invalid base64 image content: {exc}") from exc
 
-    content_type, _ = mimetypes.guess_type(hosted.file.name)
-    if not content_type:
-        content_type = "application/octet-stream"
+    # Guess extension from image bytes.
+    ext = ".png"
+    if image_data.startswith(b"\x89PNG\r\n\x1a\n"):
+        ext = ".png"
+    elif image_data[:3] == b"\xff\xd8\xff":
+        ext = ".jpg"
+    elif image_data[:6] in (b"GIF87a", b"GIF89a"):
+        ext = ".gif"
+    elif image_data[:4] == b"RIFF" and image_data[8:12] == b"WEBP":
+        ext = ".webp"
 
-    response = FileResponse(
-        f,
-        as_attachment=False,
-        filename=hosted.file.name.split("/")[-1],
+    filename = f"entry_{entry.uuid.hex}{ext}"
+
+    entry.hosted_images.all().delete()
+    HostedImage.objects.create(
+        uploaded_by=uploaded_by,
+        file=ContentFile(image_data, name=filename),
+        visibility=entry.visibility,
+        entry=entry,
     )
-    response["Content-Type"] = content_type
-    return response
+
+    # Image entries have no stored text payload after decoding.
+    entry.content = ""
+    entry.description = ""
+    entry.save(update_fields=["content", "description"])
+
+
+@csrf_exempt
+@require_http_methods(["GET"])
+def entry_image_api_by_entry_id(
+    request: HttpRequest, author_id: UUID, entry_id: UUID
+) -> HttpResponse:
+    """
+    GET an image entry converted to binary as an image.
+    Returns 404 if the entry is not an image.
+    """
+    author = get_object_or_404(Author, pk=author_id, is_deleted=False)
+    entry = get_object_or_404(Entry, pk=entry_id, author=author, is_deleted=False)
+
+    if not _entry_content_type_is_image(entry.content_type):
+        return HttpResponse(status=404)
+
+    viewer = _get_current_author(request)
+    if not _can_view_entry_detail(request, entry, viewer):
+        return HttpResponseForbidden("You do not have permission to view this image.")
+
+    hosted = entry.hosted_images.first()
+    if hosted is None:
+        return HttpResponse(status=404)
+
+    return serve_hosted_image(request, hosted.uuid)
+
+
+@csrf_exempt
+@require_http_methods(["GET"])
+def entry_image_api_by_fqid(request: HttpRequest, entry_fqid: str) -> HttpResponse:
+    """
+    FQID shortcut for image entry binary fetch.
+    Returns 404 if the entry is not an image.
+    """
+    from urllib.parse import unquote
+
+    decoded_fqid = unquote((entry_fqid or "").strip())
+    entry = get_object_or_404(Entry, fqid=decoded_fqid, is_deleted=False)
+
+    if not _entry_content_type_is_image(entry.content_type):
+        return HttpResponse(status=404)
+
+    viewer = _get_current_author(request)
+    if not _can_view_entry_detail(request, entry, viewer):
+        return HttpResponseForbidden("You do not have permission to view this image.")
+
+    hosted = entry.hosted_images.first()
+    if hosted is None:
+        return HttpResponse(status=404)
+
+    return serve_hosted_image(request, hosted.uuid)
 
 @require_http_methods(["GET", "POST"])
 def image_upload_page(request: HttpRequest, author_id: UUID) -> HttpResponse:
@@ -800,10 +1169,18 @@ def image_upload_page(request: HttpRequest, author_id: UUID) -> HttpResponse:
                 {"author": author, "error": f"Unsupported type. Use: {', '.join(sorted(allowed))}"},
             )
         try:
+            try:
+                raw = file.read()
+                file.seek(0)
+                data_base64 = base64.b64encode(raw).decode("ascii")
+            except Exception:
+                data_base64 = ""
             hosted = HostedImage.objects.create(
                 uploaded_by=author,
                 file=file,
                 visibility=Entry.VISIBILITY_PUBLIC,
+                data_base64=data_base64,
+                content_type=getattr(file, "content_type", "") or "",
             )
             url = _hosted_image_canonical_url(request, hosted)
             return render(
@@ -835,10 +1212,18 @@ def image_upload_api(request: HttpRequest, author_id: UUID) -> HttpResponse:
             f"Unsupported content type. Allowed: {', '.join(sorted(allowed))}"
         )
     try:
+        try:
+            raw = file.read()
+            file.seek(0)
+            data_base64 = base64.b64encode(raw).decode("ascii")
+        except Exception:
+            data_base64 = ""
         hosted = HostedImage.objects.create(
             uploaded_by=author,
             file=file,
             visibility=Entry.VISIBILITY_PUBLIC,
+            data_base64=data_base64,
+            content_type=getattr(file, "content_type", "") or "",
         )
     except Exception as e:
         return HttpResponseBadRequest(str(e))
@@ -853,6 +1238,9 @@ def image_upload_api(request: HttpRequest, author_id: UUID) -> HttpResponse:
 
 @require_http_methods(["GET"])
 def stream_api(request: HttpRequest) -> HttpResponse:
+    current_author = _get_current_author(request)
+    _sync_remote_entries_for_stream(current_author)
+
     queryset = _stream_entries_queryset(request)
     page_number, size, count, page_items = _paginate_queryset(request, queryset)
     return JsonResponse(
@@ -904,7 +1292,12 @@ def author_entries_api(request: HttpRequest, author_id: UUID) -> HttpResponse:
 
     if request.method == "GET":
         viewer = _get_current_author(request)
-        allowed_visibilities = get_profile_entry_visibilities(viewer, author)
+
+        remote_allowed = _remote_node_allowed_visibilities(request, author)
+        if remote_allowed is not None:
+            allowed_visibilities = remote_allowed
+        else:
+            allowed_visibilities = get_profile_entry_visibilities(viewer, author)
 
         queryset = (
             Entry.objects.filter(
@@ -937,6 +1330,7 @@ def author_entries_api(request: HttpRequest, author_id: UUID) -> HttpResponse:
         return HttpResponseBadRequest(str(exc))
 
     title = payload.get("title", "")
+    description = payload.get("description", "")
     content = payload.get("content")
     content_type = payload.get("contentType") or Entry.CONTENT_TEXT_PLAIN
     visibility = payload.get("visibility") or Entry.VISIBILITY_PUBLIC
@@ -945,7 +1339,14 @@ def author_entries_api(request: HttpRequest, author_id: UUID) -> HttpResponse:
         return HttpResponseBadRequest("Field 'content' is required.")
 
     if content_type not in dict(Entry.CONTENT_TYPE_CHOICES):
-        return HttpResponseBadRequest("Unsupported contentType.")
+        # Accept legacy federation image contentTypes even though the UI
+        # only offers a single base64 value.
+        if not _entry_content_type_is_image(content_type):
+            return HttpResponseBadRequest("Unsupported contentType.")
+
+    # Normalize all base64 image contentTypes to the single supported value.
+    if _entry_content_type_is_image(content_type):
+        content_type = Entry.CONTENT_IMAGE
 
     if visibility not in dict(Entry.VISIBILITY_CHOICES):
         return HttpResponseBadRequest("Unsupported visibility value.")
@@ -953,10 +1354,17 @@ def author_entries_api(request: HttpRequest, author_id: UUID) -> HttpResponse:
     entry = Entry.objects.create(
         author=author,
         title=title,
+        description=description,
         content=content,
         content_type=content_type,
         visibility=visibility,
     )
+
+    if _entry_content_type_is_image(content_type):
+        try:
+            _materialize_base64_image_entry(entry, uploaded_by=author)
+        except ValueError as exc:
+            return HttpResponseBadRequest(str(exc))
 
     # Fan out to remote followers / friends
     distribute_entry_to_remote_followers(entry)
@@ -993,6 +1401,7 @@ def entry_detail_api(
             return HttpResponseBadRequest(str(exc))
 
         title = payload.get("title", entry.title)
+        description = payload.get("description", getattr(entry, "description", ""))
         content = payload.get("content", entry.content)
         content_type = payload.get("contentType", entry.content_type)
         visibility = payload.get("visibility", entry.visibility)
@@ -1001,16 +1410,32 @@ def entry_detail_api(
             return HttpResponseBadRequest("Field 'content' is required.")
 
         if content_type not in dict(Entry.CONTENT_TYPE_CHOICES):
-            return HttpResponseBadRequest("Unsupported contentType.")
+            # Accept legacy federation image contentTypes even though the UI
+            # only offers a single base64 value.
+            if not _entry_content_type_is_image(content_type):
+                return HttpResponseBadRequest("Unsupported contentType.")
+
+        # Normalize all base64 image contentTypes to the single supported value.
+        if _entry_content_type_is_image(content_type):
+            content_type = Entry.CONTENT_IMAGE
 
         if visibility not in dict(Entry.VISIBILITY_CHOICES):
             return HttpResponseBadRequest("Unsupported visibility value.")
 
         entry.title = title
+        entry.description = description
         entry.content = content
         entry.content_type = content_type
         entry.visibility = visibility
         entry.save()
+
+        if _entry_content_type_is_image(content_type) and visibility != Entry.VISIBILITY_DELETED:
+            try:
+                _materialize_base64_image_entry(entry, uploaded_by=entry.author)
+            except ValueError as exc:
+                return HttpResponseBadRequest(str(exc))
+
+        distribute_entry_to_remote_followers(entry)
         return JsonResponse(_entry_to_json(request, entry))
 
     # DELETE
@@ -1023,3 +1448,56 @@ def entry_detail_api(
     entry.save()
     distribute_entry_to_remote_followers(entry)
     return HttpResponse(status=204)
+
+
+def _remote_node_allowed_visibilities(request: HttpRequest, author: Author) -> list[str] | None:
+    """
+    For node-authenticated GET /api/authors/{author}/entries requests, determine
+    which visibilities should be exposed to that remote node.
+
+    Tightened rule:
+    - Expose PUBLIC entries to remote nodes (so federation nodes can fetch the public feed).
+    - Expose UNLISTED entries only if at least one remote author on that node has an
+      APPROVED follow relationship to this local author.
+    - Expose FRIENDS only if at least one remote author on that node is a mutual friend.
+    """
+    user = getattr(request, "user", None)
+    if not user or not getattr(user, "is_authenticated", False):
+        return None
+
+    remote_node = getattr(user, "remote_node", None)
+    if not remote_node or not getattr(remote_node, "is_active", False):
+        return None
+
+    remote_authors = Author.objects.filter(
+        is_local=False,
+        is_deleted=False,
+        fqid__startswith=remote_node.base_url.rstrip("/"),
+    )
+
+    allowed = [Entry.VISIBILITY_PUBLIC]
+
+    has_approved_follower = FollowRelationship.objects.filter(
+        follower__in=remote_authors,
+        followee=author,
+        status=FollowRelationship.Status.APPROVED,
+    ).exists()
+
+    if has_approved_follower:
+        allowed.extend([Entry.VISIBILITY_UNLISTED])
+
+    has_friend = FollowRelationship.objects.filter(
+        follower__in=remote_authors,
+        followee=author,
+        status=FollowRelationship.Status.APPROVED,
+    ).filter(
+        followee__in=FollowRelationship.objects.filter(
+            follower=author,
+            status=FollowRelationship.Status.APPROVED,
+        ).values("followee")
+    ).exists()
+
+    if has_friend:
+        allowed.append(Entry.VISIBILITY_FRIENDS)
+
+    return allowed

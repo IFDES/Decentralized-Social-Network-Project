@@ -111,6 +111,8 @@ def distribute_follow_request(rel, payload: dict) -> None:
             f"Remote inbox rejected the follow request "
             f"(status {status_code}). Response: {response_body}"
         )
+<<<<<<< plswork
+=======
 
 
 def distribute_follow_state_update(rel, payload: dict) -> None:
@@ -154,3 +156,4 @@ def distribute_unfollow(follower, followee, payload: dict) -> None:
         )
     except Exception:
         pass
+>>>>>>> production

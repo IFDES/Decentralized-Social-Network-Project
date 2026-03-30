@@ -35,6 +35,22 @@
       function toggle() { hint.style.display = (ct.value === 'text/markdown') ? 'block' : 'none'; }
       ct.addEventListener('change', toggle);
       toggle();
+
+      // Federation/API rule: for image entries the user doesn't need
+      // description/content fields; images are provided via the images section.
+      var descEl = document.querySelector('[name="description"]');
+      var contentEl = document.querySelector('[name="content"]');
+      function isImageType(value) {
+        if (!value) return false;
+        return value === 'Image' || value === 'image';
+      }
+      function toggleTextFields() {
+        var shouldDisable = isImageType(ct.value);
+        if (descEl) descEl.disabled = shouldDisable;
+        if (contentEl) contentEl.disabled = shouldDisable;
+      }
+      ct.addEventListener('change', toggleTextFields);
+      toggleTextFields();
     })();
   </script>
 {% endblock %}

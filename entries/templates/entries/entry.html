@@ -29,42 +29,32 @@
   <h1 class="entry-card__title">
     <a href="{% url 'entries:entry-detail' author.uuid entry.uuid %}">{{ entry.title|default:"Entry" }}</a>
   </h1>
+  <!-- Description -->
+  {% if entry.description %}
+    <div class="entry-card__description">
+      <pre>{{ entry.description }}</pre>
+    </div>
+  {% endif %}
 
   <!-- Content -->
   <div class="entry-card__content">
-  {% with hosted_images=entry.hosted_images.all %}
-    {% if hosted_images %}
-      {% if entry.content %}
-        {% if entry.content_type == "text/markdown" %}
-          <div class="entry-markdown">{{ entry.content|render_markdown|safe }}</div>
-        {% else %}
-          <pre>{{ entry.content }}</pre>
-        {% endif %}
-      {% endif %}
-      <div class="entry-images">
-        {% for hosted in hosted_images %}
-          <figure class="entry-image">
-            <img src="{% url 'entries:serve-hosted-image' hosted.uuid %}" alt="{{ entry.title|default:'Image' }}" />
-          </figure>
-        {% endfor %}
-      </div>
-    {% elif entry.content_type == "image" or entry.content_type == "image/png" or entry.content_type == "image/jpeg" %}
-      {% comment %}Legacy: single image in content{% endcomment %}
-      {% if entry.content %}
-        <figure class="entry-image">
-          <img src="{{ entry.content }}" alt="{{ entry.title|default:'Image' }}" />
-        </figure>
-      {% endif %}
-    {% else %}
-      {% if entry.content %}
-        {% if entry.content_type == "text/markdown" %}
-          <div class="entry-markdown">{{ entry.content|render_markdown|safe }}</div>
-        {% else %}
-          <pre>{{ entry.content }}</pre>
-        {% endif %}
-      {% endif %}
+    {% if entry.content and entry.content_type == "text/markdown" %}
+      <div class="entry-markdown">{{ entry.content|render_markdown|safe }}</div>
     {% endif %}
-  {% endwith %}
+    {% if entry.content and entry.content_type == "text/plain" %}
+      <pre>{{ entry.content }}</pre>
+    {% endif %}
+    {% with hosted_images=entry.hosted_images.all %}
+      {% if hosted_images %}
+        <div class="entry-images">
+          {% for hosted in hosted_images %}
+            <figure class="entry-image">
+              <img src="{% url 'entries:serve-hosted-image' hosted.uuid %}" alt="{{ entry.title|default:'Image' }}" />
+            </figure>
+          {% endfor %}
+        </div>
+      {% endif %}
+    {% endwith %}
 </div>
 
   <!-- Likes footer -->

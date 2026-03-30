@@ -5,8 +5,10 @@ Called after a local author creates (or edits) an entry so that remote nodes
 hosting followers can ingest the content.
 """
 
+import base64
 import logging
 from datetime import timezone as tz
+import mimetypes
 from urllib.parse import urlparse
 
 from django.conf import settings
@@ -35,13 +37,47 @@ def _entry_to_inbox_json(entry: Entry) -> dict:
     entry_id = entry.fqid or f"{base}/api/authors/{author.uuid}/entries/{entry.uuid}"
     web = entry.web or f"{base}/authors/{author.uuid}/entries/{entry.uuid}"
 
+    description = getattr(entry, "description", "") or ""
+    content = entry.content or ""
+    content_type = entry.content_type or Entry.CONTENT_TEXT_PLAIN
+
+    # Image entries are federated as normal `entry` objects whose `content`
+    # contains base64 bytes. `contentType` is simplified to `Image`.
+    if (
+        content_type in Entry.IMAGE_BASE64_CONTENT_TYPES
+        or content_type == Entry.CONTENT_IMAGE_LEGACY
+        or (isinstance(content_type, str) and content_type.startswith("image/"))
+    ):
+        hosted = entry.hosted_images.first()
+        if hosted:
+            # Prefer DB-stored bytes (survives ephemeral filesystems) and fall back to disk.
+            if getattr(hosted, "data_base64", ""):
+                content = hosted.data_base64
+                content_type = Entry.CONTENT_IMAGE
+            elif hosted.file:
+                try:
+                    raw = hosted.file.read()
+                    content = base64.b64encode(raw).decode("ascii")
+                    # Normalize all image base64 payloads to a single contentType.
+                    content_type = Entry.CONTENT_IMAGE
+                except (FileNotFoundError, OSError):
+                    # If the file is missing (e.g., after Heroku restart), still
+                    # emit a valid entry object; recipients will just not get bytes.
+                    content = ""
+                    content_type = Entry.CONTENT_IMAGE
+
+        # For image entries we don't send textual description/content.
+        description = ""
+        # content_type stays as the image/base64 value (or legacy).
+
     return {
         "type": "entry",
         "title": entry.title,
         "id": entry_id,
         "web": web,
-        "contentType": entry.content_type,
-        "content": entry.content,
+        "description": description,
+        "contentType": content_type,
+        "content": content,
         "author": author_to_json(author),
         "published": entry.published.astimezone(tz.utc).isoformat(),
         "visibility": entry.visibility,
@@ -90,18 +126,12 @@ def distribute_entry_to_remote_followers(entry: Entry) -> None:
     - FRIENDS entries → only remote friends (mutual APPROVED follow)
     - DELETED entries → remote approved followers and remote friends (best effort
       to notify all nodes that may have received an earlier version)
-    - UNLISTED entries → not distributed
+    - UNLISTED entries → pushed to all remote approved followers and friends
+      so they can update the visibility on their local copy
     """
-    if entry.visibility not in (
-        Entry.VISIBILITY_PUBLIC,
-        Entry.VISIBILITY_FRIENDS,
-        Entry.VISIBILITY_DELETED,
-    ):
-        return
-
     author = entry.author
 
-    if entry.visibility == Entry.VISIBILITY_PUBLIC:
+    if entry.visibility in (Entry.VISIBILITY_PUBLIC, Entry.VISIBILITY_UNLISTED):
         # All remote authors with APPROVED follow on this author
         remote_followers = (
             FollowRelationship.objects.filter(
@@ -117,8 +147,8 @@ def distribute_entry_to_remote_followers(entry: Entry) -> None:
         # FRIENDS visibility: mutual APPROVED follow, remote only
         friends = FollowRelationship.friends_of(author).filter(is_local=False)
         recipients = friends
-    else:
-        # DELETED: notify both remote approved followers and remote friends.
+    elif entry.visibility == Entry.VISIBILITY_DELETED:
+        # DELETED: notify both remote approved followers and remote friends (best effort).
         remote_follower_ids = (
             FollowRelationship.objects.filter(
                 followee=author,
@@ -133,6 +163,8 @@ def distribute_entry_to_remote_followers(entry: Entry) -> None:
             pk__in=set(remote_follower_ids).union(set(remote_friend_ids)),
             is_deleted=False,
         )
+    else:
+        return
 
     payload = _entry_to_inbox_json(entry)
     sent_targets: set[tuple[str, str]] = set()
@@ -177,3 +209,85 @@ def distribute_entry_to_remote_followers(entry: Entry) -> None:
                 recipient.fqid,
                 exc,
             )
+
+
+def _entries_batch_to_inbox_json(entries: list[Entry]) -> dict:
+    """
+    Build a lightweight batch payload for pushing to a remote inbox.
+
+    This payload is intentionally shaped like the project-wide `type="entries"`
+    objects (stream/list responses), so other node backends can ingest the same
+    structure.
+    """
+    return {
+        "type": "entries",
+        "page_number": 1,
+        "size": len(entries),
+        "count": len(entries),
+        "src": [_entry_to_inbox_json(e) for e in entries],
+    }
+
+
+def distribute_existing_entries_to_remote_follower(
+    *,
+    entry_author: Author,
+    remote_follower: Author,
+) -> None:
+    """
+    When a remote follower's follow request is approved, push *all* existing
+    entries from `entry_author` to `remote_follower`'s inbox.
+
+    Recipient filtering rules:
+    - PUBLIC and UNLISTED entries are delivered to approved followers.
+    - FRIENDS entries are delivered only if mutual friends exist.
+    """
+    if not remote_follower or getattr(remote_follower, "is_local", True):
+        return
+    if getattr(entry_author, "is_deleted", False):
+        return
+
+    is_mutual_friend = FollowRelationship.are_friends(remote_follower, entry_author)
+
+    entries_qs = (
+        Entry.objects.filter(
+            author=entry_author,
+            is_deleted=False,
+        )
+        .exclude(visibility=Entry.VISIBILITY_DELETED)
+        .filter(visibility__in=[Entry.VISIBILITY_PUBLIC, Entry.VISIBILITY_UNLISTED])
+    )
+
+    if is_mutual_friend:
+        entries_qs = entries_qs | Entry.objects.filter(
+            author=entry_author,
+            is_deleted=False,
+            visibility=Entry.VISIBILITY_FRIENDS,
+        )
+
+    entries = list(entries_qs.order_by("-published"))
+    if not entries:
+        return
+
+    node = _remote_node_for_author(remote_follower)
+    if node is None:
+        return
+
+    recipient_uuid = _extract_author_uuid_from_fqid(remote_follower.fqid or "")
+    if not recipient_uuid:
+        recipient_uuid = str(remote_follower.uuid)
+
+    inbox_path = f"api/authors/{recipient_uuid}/inbox"
+    payload = _entries_batch_to_inbox_json(entries)
+
+    try:
+        make_node_request(node, "POST", inbox_path, json=payload)
+    except NodeDisabled:
+        # Silently skip disabled nodes to match the rest of federation fan-out.
+        return
+    except Exception as exc:
+        logger.error(
+            "Failed to distribute existing entries from %s to follower %s: %s",
+            entry_author.fqid or entry_author.uuid,
+            remote_follower.fqid or remote_follower.uuid,
+            exc,
+        )

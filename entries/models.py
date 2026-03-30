@@ -27,6 +27,10 @@ class HostedImage(models.Model):
     """
     uuid = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     file = models.ImageField(upload_to="entries/images/%Y/%m/")
+    # Heroku's filesystem is ephemeral; persist bytes as a fallback so images
+    # remain viewable after restart/redeploy.
+    data_base64 = models.TextField(blank=True, default="")
+    content_type = models.CharField(max_length=100, blank=True, default="")
     uploaded_by = models.ForeignKey(
         Author,
         related_name="hosted_images",
@@ -52,6 +56,21 @@ class HostedImage(models.Model):
     class Meta:
         ordering = ["-created_at"]
 
+    def delete(self, *args, **kwargs):
+        """
+        Best-effort delete: if the underlying file is already missing on disk
+        (common on ephemeral filesystems), still allow the DB row to be removed.
+        """
+        try:
+            if self.file:
+                try:
+                    self.file.delete(save=False)
+                except (FileNotFoundError, OSError):
+                    pass
+        except Exception:
+            pass
+        return super().delete(*args, **kwargs)
+
 # This piece of code is assisted by CoPilot on 27 Feb 2026 02:05 with the prompt
 # "Help me polish this section of code and fill in missing parts on entries in a social media platform in Django"
 class Entry(models.Model):
@@ -68,7 +87,19 @@ class Entry(models.Model):
 
     CONTENT_TEXT_PLAIN = "text/plain"
     CONTENT_TEXT_MARKDOWN = "text/markdown"
-    CONTENT_IMAGE = "image"
+
+    # Federated/API image entry marker.
+    # The client sends base64 bytes in `content`; this value avoids needing
+    # clients to spell MIME types or the word "base64".
+    CONTENT_IMAGE = "Image"
+
+    # Legacy DB value / older clients.
+    CONTENT_IMAGE_LEGACY = "image"
+
+    # Older payload marker we still accept for backward compatibility.
+    CONTENT_IMAGE_BASE64_LEGACY = "application/base64"
+
+    IMAGE_BASE64_CONTENT_TYPES = {CONTENT_IMAGE, CONTENT_IMAGE_BASE64_LEGACY}
 
     CONTENT_TYPE_CHOICES = [
         (CONTENT_TEXT_PLAIN, "Plain text"),
@@ -97,18 +128,22 @@ class Entry(models.Model):
     )
 
     title = models.CharField(max_length=255, blank=True)
+    description = models.TextField(blank=True, default="", help_text="A brief description of the entry.")
 
     content_type = models.CharField(
         max_length=64,
         choices=CONTENT_TYPE_CHOICES,
         default=CONTENT_TEXT_PLAIN,
     )
-    content = models.TextField()
+    # For image entries (content_type in image/*;base64), the storage node
+    # may keep `content` empty after decoding base64 into HostedImage.
+    content = models.TextField(blank=True, default="")
 
     visibility = models.CharField(
         max_length=16,
         choices=VISIBILITY_CHOICES,
         default=VISIBILITY_PUBLIC,
+        db_index=True,
     )
 
     external_id = models.CharField(
@@ -119,10 +154,10 @@ class Entry(models.Model):
         help_text="External ID for deduplication (e.g. GitHub event ID).",
     )
 
-    is_deleted = models.BooleanField(default=False)
+    is_deleted = models.BooleanField(default=False, db_index=True)
     deleted_at = models.DateTimeField(null=True, blank=True)
 
-    published = models.DateTimeField(auto_now_add=True)
+    published = models.DateTimeField(auto_now_add=True, db_index=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:

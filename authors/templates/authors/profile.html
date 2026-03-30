@@ -242,13 +242,9 @@
   {% for entry in entries %}
   <div class="card">
     <h3>
-      {% if entry.author.is_local %}
-      <a href="{% url 'entries:entry-detail' author.uuid entry.uuid %}">{{ entry.title|default:"(untitled entry)" }}</a>
-      {% elif entry.web %}
-      <a href="{{ entry.web }}">{{ entry.title|default:"(untitled entry)" }}</a>
-      {% else %}
-      {{ entry.title|default:"(untitled entry)" }}
-      {% endif %}
+      <a href="{% url 'entries:entry-detail' author.uuid entry.uuid %}">
+        {{ entry.title|default:"(untitled entry)" }}
+      </a>
     </h3>
     <div class="content-preview">{{ entry.content|truncatechars:200 }}</div>
     <div class="meta">

@@ -5,26 +5,32 @@ from . import views
 app_name = "follows"
 
 urlpatterns = [
-    # API endpoints
+    # Required follow API endpoints
+    # Accept routes both with and without trailing slash (federation clients may vary).
     path("api/authors/<uuid:author_serial>/following", views.following_list),
+    path("api/authors/<uuid:author_serial>/following/", views.following_list),
+    path(
+        "api/authors/<uuid:author_serial>/following/<path:foreign_author_fqid>/",
+        views.following_detail,
+    ),
     path(
         "api/authors/<uuid:author_serial>/following/<path:foreign_author_fqid>",
         views.following_detail,
     ),
     path("api/authors/<uuid:author_serial>/followers", views.followers_list),
+    path("api/authors/<uuid:author_serial>/followers/", views.followers_list),
     path(
         "api/authors/<uuid:author_serial>/followers/<path:foreign_author_fqid>",
         views.followers_detail,
     ),
     path(
-        "api/authors/<uuid:author_serial>/follow_requests",
+        "api/authors/<uuid:author_serial>/followers/<path:foreign_author_fqid>/",
+        views.followers_detail,
+    ),
+    path("api/authors/<uuid:author_serial>/follow_requests", views.follow_requests_list),
+    path(
+        "api/authors/<uuid:author_serial>/follow_requests/",
         views.follow_requests_list,
-    ),
-    path(
-        "api/authors/<uuid:author_serial>/friends", views.friends_list, name="friends-list"
-    ),
-    path(
-        "api/authors/<uuid:author_serial>/friends/<path:foreign_author_fqid>", views.friends_detail, name="friends-detail"
     ),
 
     # Local UI endpoints
@@ -36,11 +42,6 @@ urlpatterns = [
         name="follow-local",
     ),
     path(
-        "follows/unfollow/<uuid:target_uuid>/",
-        views.unfollow_local_author_ui,
-        name="unfollow-local",
-    ),
-    path(
         "follows/requests/<int:rel_id>/approve/",
         views.approve_request_ui,
         name="follow-approve",
@@ -49,5 +50,15 @@ urlpatterns = [
         "follows/requests/<int:rel_id>/deny/",
         views.deny_request_ui,
         name="follow-deny",
+    ),
+    path(
+        "follows/follow-remote/",
+        views.follow_remote_author_ui,
+        name="follow-remote",
+    ),
+    path(
+        "follows/unfollow/",
+        views.unfollow_author_ui,
+        name="unfollow-author",
     ),
 ]

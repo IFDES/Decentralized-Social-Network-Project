@@ -47,7 +47,7 @@ class FollowEndpointsTests(TestCase):
         """UserA follows UserB -> creates (A->B) with status=PENDING and response state=requesting."""
         self.client.login(username="UserA", password="passA12345")
 
-        url = f"/api/authors/{self.a_uuid}/following/{self.enc_b_fqid}"
+        url = f"/api/authors/{self.a_uuid}/following/{self.enc_b_fqid}/"
         resp = self.client.put(url, content_type="application/json")
 
         self.assertIn(resp.status_code, (200, 201), resp.content)
@@ -68,14 +68,14 @@ class FollowEndpointsTests(TestCase):
         # Create follow request as A
         self.client.login(username="UserA", password="passA12345")
         self.client.put(
-            f"/api/authors/{self.a_uuid}/following/{self.enc_b_fqid}",
+            f"/api/authors/{self.a_uuid}/following/{self.enc_b_fqid}/",
             content_type="application/json",
         )
         self.client.logout()
 
         # B views follow requests
         self.client.login(username="UserB", password="passB12345")
-        resp = self.client.get(f"/api/authors/{self.b_uuid}/follow_requests")
+        resp = self.client.get(f"/api/authors/{self.b_uuid}/follow_requests/")
         self.assertEqual(resp.status_code, 200, resp.content)
 
         payload = resp.json()
@@ -94,7 +94,7 @@ class FollowEndpointsTests(TestCase):
         # A follows B (PENDING)
         self.client.login(username="UserA", password="passA12345")
         self.client.put(
-            f"/api/authors/{self.a_uuid}/following/{self.enc_b_fqid}",
+            f"/api/authors/{self.a_uuid}/following/{self.enc_b_fqid}/",
             content_type="application/json",
         )
         self.client.logout()
@@ -102,7 +102,7 @@ class FollowEndpointsTests(TestCase):
         # B accepts A
         self.client.login(username="UserB", password="passB12345")
         resp = self.client.put(
-            f"/api/authors/{self.b_uuid}/followers/{self.enc_a_fqid}",
+            f"/api/authors/{self.b_uuid}/followers/{self.enc_a_fqid}/",
             content_type="application/json",
         )
         self.assertEqual(resp.status_code, 200, resp.content)
@@ -119,7 +119,7 @@ class FollowEndpointsTests(TestCase):
         self.assertEqual(body["object"]["id"], self.author_b.fqid)
 
         # GET followers/{A_FQID} should now return 200 (not 404)
-        resp2 = self.client.get(f"/api/authors/{self.b_uuid}/followers/{self.enc_a_fqid}")
+        resp2 = self.client.get(f"/api/authors/{self.b_uuid}/followers/{self.enc_a_fqid}/")
         self.assertEqual(resp2.status_code, 200, resp2.content)
 
     def test_deny_follow_request_sets_denied_and_returns_rejected_or_204(self):
@@ -131,14 +131,14 @@ class FollowEndpointsTests(TestCase):
         # A follows B (PENDING)
         self.client.login(username="UserA", password="passA12345")
         self.client.put(
-            f"/api/authors/{self.a_uuid}/following/{self.enc_b_fqid}",
+            f"/api/authors/{self.a_uuid}/following/{self.enc_b_fqid}/",
             content_type="application/json",
         )
         self.client.logout()
 
         # B denies A
         self.client.login(username="UserB", password="passB12345")
-        resp = self.client.delete(f"/api/authors/{self.b_uuid}/followers/{self.enc_a_fqid}")
+        resp = self.client.delete(f"/api/authors/{self.b_uuid}/followers/{self.enc_a_fqid}/")
 
         self.assertIn(resp.status_code, (200, 204), resp.content)
 
@@ -160,12 +160,12 @@ class FollowEndpointsTests(TestCase):
         # A follows B
         self.client.login(username="UserA", password="passA12345")
         self.client.put(
-            f"/api/authors/{self.a_uuid}/following/{self.enc_b_fqid}",
+            f"/api/authors/{self.a_uuid}/following/{self.enc_b_fqid}/",
             content_type="application/json",
         )
 
         # A unfollows B
-        resp = self.client.delete(f"/api/authors/{self.a_uuid}/following/{self.enc_b_fqid}")
+        resp = self.client.delete(f"/api/authors/{self.a_uuid}/following/{self.enc_b_fqid}/")
         self.assertEqual(resp.status_code, 204, resp.content)
 
         self.assertFalse(
@@ -173,7 +173,7 @@ class FollowEndpointsTests(TestCase):
         )
 
         # Check endpoint now returns 404
-        resp2 = self.client.get(f"/api/authors/{self.a_uuid}/following/{self.enc_b_fqid}")
+        resp2 = self.client.get(f"/api/authors/{self.a_uuid}/following/{self.enc_b_fqid}/")
         self.assertEqual(resp2.status_code, 404, resp2.content)
 
     def test_ownership_enforced_cannot_manage_other_author(self):
@@ -181,15 +181,169 @@ class FollowEndpointsTests(TestCase):
         self.client.login(username="UserA", password="passA12345")
 
         # Try to view B's follow_requests as A (should be forbidden)
-        resp = self.client.get(f"/api/authors/{self.b_uuid}/follow_requests")
+        resp = self.client.get(f"/api/authors/{self.b_uuid}/follow_requests/")
         self.assertEqual(resp.status_code, 403, resp.content)
 
     def test_follow_self_rejected(self):
         """Following yourself should return 400."""
         self.client.login(username="UserA", password="passA12345")
-        url = f"/api/authors/{self.a_uuid}/following/{self.enc_a_fqid}"
+        url = f"/api/authors/{self.a_uuid}/following/{self.enc_a_fqid}/"
         resp = self.client.put(url, content_type="application/json")
         self.assertEqual(resp.status_code, 400, resp.content)
+
+
+class FollowFederationEntrySyncTests(TestCase):
+    def setUp(self):
+        from config.core.models import RemoteNode
+
+        self.client = Client()
+
+        # Local node: UserB (the followee)
+        self.author_b = Author.objects.create(
+            display_name="UserB",
+            fqid="http://127.0.0.1:8000/api/authors/b",
+            host="http://127.0.0.1:8000/api/",
+            web="http://127.0.0.1:8000/authors/b",
+            is_local=True,
+        )
+        self.user_b = User.objects.create_user(username="UserB_sync", password="passB12345")
+        AuthorAccount.objects.create(user=self.user_b, author=self.author_b)
+
+        self.b_uuid = str(self.author_b.uuid)
+
+        # Remote node follower: UserA
+        self.author_a = Author.objects.create(
+            display_name="Remote UserA",
+            fqid="https://remote.example/api/authors/" + "00000000-0000-0000-0000-00000000a1b1",
+            host="https://remote.example/api/",
+            web="https://remote.example/authors/00000000-0000-0000-0000-00000000a1b1",
+            is_local=False,
+        )
+        self.a_fqid = self.author_a.fqid
+        self.enc_a_fqid = enc(self.a_fqid)
+
+        # Remote node record for outgoing fan-out
+        self.remote_node = RemoteNode.objects.create(
+            display_name="Remote Test Node",
+            base_url="https://remote.example",
+            outgoing_username="us_to_them",
+            outgoing_password="secret",
+        )
+
+    def _make_entries(self):
+        from entries.models import Entry
+
+        Entry.objects.create(
+            author=self.author_b,
+            title="Public entry",
+            content="public",
+            visibility=Entry.VISIBILITY_PUBLIC,
+        )
+        Entry.objects.create(
+            author=self.author_b,
+            title="Unlisted entry",
+            content="unlisted",
+            visibility=Entry.VISIBILITY_UNLISTED,
+        )
+        Entry.objects.create(
+            author=self.author_b,
+            title="Friends entry",
+            content="friends",
+            visibility=Entry.VISIBILITY_FRIENDS,
+        )
+
+    def test_accept_follow_distributes_entries_batch_with_friends_when_mutual(self):
+        from unittest.mock import patch, MagicMock
+
+        from entries.models import Entry  # noqa: F401
+
+        # A (remote) requests follow -> B (local) has PENDING row
+        FollowRelationship.objects.create(
+            follower=self.author_a,
+            followee=self.author_b,
+            status=FollowRelationship.Status.PENDING,
+        )
+
+        # Mutual friend requires B -> A approved
+        FollowRelationship.objects.create(
+            follower=self.author_b,
+            followee=self.author_a,
+            status=FollowRelationship.Status.APPROVED,
+        )
+
+        self._make_entries()
+
+        self.client.login(username="UserB_sync", password="passB12345")
+
+        url = f"/api/authors/{self.b_uuid}/followers/{self.enc_a_fqid}/"
+        with patch("entries.distribution.make_node_request") as mock_req:
+            mock_req.return_value = MagicMock(status_code=201)
+
+            resp = self.client.put(url, content_type="application/json")
+            self.assertIn(resp.status_code, (200, 201), resp.content)
+
+        # One batched POST with all eligible entries
+        self.assertEqual(mock_req.call_count, 1)
+        args, kwargs = mock_req.call_args
+        self.assertEqual(args[1], "POST")
+        self.assertEqual(kwargs["json"]["type"], "entries")
+        sent_entries = kwargs["json"]["src"]
+        self.assertEqual(len(sent_entries), 3)
+        sent_visibilities = {e.get("visibility") for e in sent_entries}
+        self.assertEqual(
+            sent_visibilities,
+            {Entry.VISIBILITY_PUBLIC, Entry.VISIBILITY_UNLISTED, Entry.VISIBILITY_FRIENDS},
+        )
+
+    def test_accept_follow_distributes_entries_batch_without_friends_when_not_mutual(self):
+        from unittest.mock import patch, MagicMock
+
+        from entries.models import Entry  # noqa: F401
+
+        FollowRelationship.objects.create(
+            follower=self.author_a,
+            followee=self.author_b,
+            status=FollowRelationship.Status.PENDING,
+        )
+        # NOTE: no B -> A approved relationship here, so not mutual friends.
+
+        self._make_entries()
+        self.client.login(username="UserB_sync", password="passB12345")
+
+        url = f"/api/authors/{self.b_uuid}/followers/{self.enc_a_fqid}/"
+        with patch("entries.distribution.make_node_request") as mock_req:
+            mock_req.return_value = MagicMock(status_code=201)
+            resp = self.client.put(url, content_type="application/json")
+            self.assertIn(resp.status_code, (200, 201), resp.content)
+
+        self.assertEqual(mock_req.call_count, 1)
+        args, kwargs = mock_req.call_args
+        self.assertEqual(kwargs["json"]["type"], "entries")
+        sent_entries = kwargs["json"]["src"]
+        self.assertEqual(len(sent_entries), 2)
+        sent_visibilities = {e.get("visibility") for e in sent_entries}
+        self.assertEqual(sent_visibilities, {Entry.VISIBILITY_PUBLIC, Entry.VISIBILITY_UNLISTED})
+
+    def test_deny_follow_does_not_distribute_entries(self):
+        from unittest.mock import patch, MagicMock
+
+        from entries.models import Entry  # noqa: F401
+
+        FollowRelationship.objects.create(
+            follower=self.author_a,
+            followee=self.author_b,
+            status=FollowRelationship.Status.PENDING,
+        )
+        self._make_entries()
+
+        self.client.login(username="UserB_sync", password="passB12345")
+        url = f"/api/authors/{self.b_uuid}/followers/{self.enc_a_fqid}/"
+        with patch("entries.distribution.make_node_request") as mock_req:
+            mock_req.return_value = MagicMock(status_code=201)
+            resp = self.client.delete(url)
+            self.assertIn(resp.status_code, (200, 204), resp.content)
+
+        mock_req.assert_not_called()
 
 
 class FollowEdgeCaseTests(TestCase):
@@ -214,35 +368,35 @@ class FollowEdgeCaseTests(TestCase):
     def test_follow_nonexistent_user_returns_404(self):
         """PUT following/{nonexistent} should return 404."""
         self.client.login(username="UserA", password="passA12345")
-        url = f"/api/authors/{self.a_uuid}/following/{self.nonexistent_fqid}"
+        url = f"/api/authors/{self.a_uuid}/following/{self.nonexistent_fqid}/"
         resp = self.client.put(url, content_type="application/json")
         self.assertEqual(resp.status_code, 404, resp.content)
 
     def test_unfollow_nonexistent_user_returns_404(self):
         """DELETE following/{nonexistent} should return 404."""
         self.client.login(username="UserA", password="passA12345")
-        url = f"/api/authors/{self.a_uuid}/following/{self.nonexistent_fqid}"
+        url = f"/api/authors/{self.a_uuid}/following/{self.nonexistent_fqid}/"
         resp = self.client.delete(url)
         self.assertEqual(resp.status_code, 404, resp.content)
 
     def test_check_following_nonexistent_user_returns_404(self):
         """GET following/{nonexistent} should return 404."""
         self.client.login(username="UserA", password="passA12345")
-        url = f"/api/authors/{self.a_uuid}/following/{self.nonexistent_fqid}"
+        url = f"/api/authors/{self.a_uuid}/following/{self.nonexistent_fqid}/"
         resp = self.client.get(url)
         self.assertEqual(resp.status_code, 404, resp.content)
 
     def test_accept_follow_from_nonexistent_user_returns_404(self):
         """PUT followers/{nonexistent} should return 404."""
         self.client.login(username="UserA", password="passA12345")
-        url = f"/api/authors/{self.a_uuid}/followers/{self.nonexistent_fqid}"
+        url = f"/api/authors/{self.a_uuid}/followers/{self.nonexistent_fqid}/"
         resp = self.client.put(url, content_type="application/json")
         self.assertEqual(resp.status_code, 404, resp.content)
 
     def test_deny_follow_from_nonexistent_user_returns_404(self):
         """DELETE followers/{nonexistent} should return 404."""
         self.client.login(username="UserA", password="passA12345")
-        url = f"/api/authors/{self.a_uuid}/followers/{self.nonexistent_fqid}"
+        url = f"/api/authors/{self.a_uuid}/followers/{self.nonexistent_fqid}/"
         resp = self.client.delete(url)
         self.assertEqual(resp.status_code, 404, resp.content)
 
@@ -280,7 +434,7 @@ class FollowDeletedAuthorTests(TestCase):
         self.author_b.save(update_fields=["is_deleted"])
 
         self.client.login(username="UserA_deleted", password="passA12345")
-        url = f"/api/authors/{self.a_uuid}/following/{self.enc_b_fqid}"
+        url = f"/api/authors/{self.a_uuid}/following/{self.enc_b_fqid}/"
         resp = self.client.put(url, content_type="application/json")
 
         self.assertEqual(resp.status_code, 404, resp.content)
@@ -296,7 +450,7 @@ class FollowDeletedAuthorTests(TestCase):
         self.author_b.save(update_fields=["is_deleted"])
 
         self.client.login(username="UserA_deleted", password="passA12345")
-        url = f"/api/authors/{self.a_uuid}/following/{self.enc_b_fqid}"
+        url = f"/api/authors/{self.a_uuid}/following/{self.enc_b_fqid}/"
         resp = self.client.delete(url)
 
         self.assertEqual(resp.status_code, 404, resp.content)
@@ -306,7 +460,7 @@ class FollowDeletedAuthorTests(TestCase):
         self.author_b.save(update_fields=["is_deleted"])
 
         self.client.login(username="UserA_deleted", password="passA12345")
-        url = f"/api/authors/{self.a_uuid}/following/{self.enc_b_fqid}"
+        url = f"/api/authors/{self.a_uuid}/following/{self.enc_b_fqid}/"
         resp = self.client.get(url)
 
         self.assertEqual(resp.status_code, 404, resp.content)
@@ -322,7 +476,7 @@ class FollowDeletedAuthorTests(TestCase):
         self.author_a.save(update_fields=["is_deleted"])
 
         self.client.login(username="UserB_deleted", password="passB12345")
-        url = f"/api/authors/{self.b_uuid}/followers/{self.enc_a_fqid}"
+        url = f"/api/authors/{self.b_uuid}/followers/{self.enc_a_fqid}/"
         resp = self.client.put(url, content_type="application/json")
 
         self.assertEqual(resp.status_code, 404, resp.content)
@@ -338,7 +492,7 @@ class FollowDeletedAuthorTests(TestCase):
         self.author_a.save(update_fields=["is_deleted"])
 
         self.client.login(username="UserB_deleted", password="passB12345")
-        url = f"/api/authors/{self.b_uuid}/followers/{self.enc_a_fqid}"
+        url = f"/api/authors/{self.b_uuid}/followers/{self.enc_a_fqid}/"
         resp = self.client.delete(url)
 
         self.assertEqual(resp.status_code, 404, resp.content)
@@ -389,7 +543,7 @@ class FollowDeletedAuthorTests(TestCase):
         self.author_a.save(update_fields=["is_deleted"])
 
         self.client.login(username="UserB_deleted", password="passB12345")
-        resp = self.client.get(f"/api/authors/{self.b_uuid}/followers")
+        resp = self.client.get(f"/api/authors/{self.b_uuid}/followers/")
         self.assertEqual(resp.status_code, 200)
 
         followers = resp.json()["followers"]

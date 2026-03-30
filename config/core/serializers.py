@@ -20,7 +20,7 @@ def build_author_host() -> str:
     """
     Build the 'host' field for an Author JSON object.
     """
-    return f"{settings.SERVICE_BASE_URL}/api/"
+    return f"{settings.SERVICE_BASE_URL}/api"
 
 
 def build_author_web(author) -> str:
@@ -43,11 +43,10 @@ def author_to_json(author) -> dict:
         "displayName": "Greg Johnson",
         "github": "http://github.com/gjohnson",
         "profileImage": "https://i.imgur.com/k7XVwpB.jpeg",
-        "web": "http://nodeaaaa/authors/greg",
-        "description": "Optional bio/description text"
+        "web": "http://nodeaaaa/authors/greg"
     }
     """
-    fqid = build_author_id(author)
+    fqid = author.fqid or build_author_id(author)
     host = author.host or build_author_host()
     web = author.web or build_author_web(author)
 
@@ -55,12 +54,10 @@ def author_to_json(author) -> dict:
         "type": "author",
         "id": fqid,
         "host": host,
-        "web": web,
         "displayName": author.display_name or "",
         "github": author.github or "",
         "profileImage": author.profile_image or "",
-        "description": author.description or "",
+        "web": web,
     }
 
 # Add other serializers here later.
-

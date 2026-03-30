@@ -1,7 +1,17 @@
 from datetime import datetime, timezone
+<<<<<<< plswork
+import base64
+import uuid as uuid_mod
+
+from django.core.files.base import ContentFile
+
+from authors.models import Author
+from .models import Entry, HostedImage
+=======
 
 from authors.models import Author
 from .models import Entry
+>>>>>>> production
 from authors.services import normalize_author_fqid
 
 
@@ -69,23 +79,91 @@ def handle_remote_entry_payload(payload: dict):
         raise ValueError("Entry payload is missing 'id' (FQID).")
 
     title = payload.get("title", "")
+<<<<<<< plswork
+    description = payload.get("description", "") or ""
+    content = payload.get("content", "") or ""
+=======
     content = payload.get("content", "")
+>>>>>>> production
     content_type = payload.get("contentType", Entry.CONTENT_TEXT_PLAIN)
     visibility = payload.get("visibility", Entry.VISIBILITY_PUBLIC)
     web = payload.get("web", "")
 
     is_deleted = visibility == Entry.VISIBILITY_DELETED
 
+<<<<<<< plswork
+    is_base64_image = (
+        content_type in Entry.IMAGE_BASE64_CONTENT_TYPES
+        or content_type == Entry.CONTENT_IMAGE_LEGACY
+        or (isinstance(content_type, str) and content_type.startswith("image/"))
+    )
+
+    # Image entries don't need stored textual description content.
+    if is_base64_image:
+        description = ""
+
+    # Normalize all base64 image payloads to the single supported
+    # contentType value.
+    # Normalize all image/base64 payloads to the single marker clients
+    # understand for federated image entries.
+    normalized_content_type = Entry.CONTENT_IMAGE if is_base64_image else content_type
+
+    if is_base64_image and not is_deleted and not content:
+        raise ValueError("Image entry payload is missing base64 'content'.")
+    if not is_deleted and not content and not is_base64_image:
+        raise ValueError("Entry payload is missing 'content'.")
+
+    content_to_store = "" if is_base64_image else content
+
+    def _decode_and_store_hosted_image(entry: Entry) -> None:
+        try:
+            image_data = base64.b64decode(content)
+        except Exception as exc:
+            raise ValueError(f"Failed to decode base64 image content: {exc}") from exc
+
+        # Guess extension from magic numbers. This keeps payload
+        # interoperability even if the sender didn't provide a specific MIME.
+        ext = ".png"
+        if image_data.startswith(b"\x89PNG\r\n\x1a\n"):
+            ext = ".png"
+        elif image_data[:3] == b"\xff\xd8\xff":
+            ext = ".jpg"
+        elif image_data[:6] in (b"GIF87a", b"GIF89a"):
+            ext = ".gif"
+        elif image_data[:4] == b"RIFF" and image_data[8:12] == b"WEBP":
+            ext = ".webp"
+
+        filename = f"remote_{uuid_mod.uuid4().hex}{ext}"
+
+        # Idempotent: replace hosted image(s) for this entry.
+        entry.hosted_images.all().delete()
+        HostedImage.objects.create(
+            uploaded_by=remote_author,
+            file=ContentFile(image_data, name=filename),
+            visibility=visibility,
+            entry=entry,
+            data_base64=base64.b64encode(image_data).decode("ascii"),
+            content_type="image/png" if ext == ".png" else ("image/jpeg" if ext == ".jpg" else ("image/gif" if ext == ".gif" else ("image/webp" if ext == ".webp" else ""))),
+        )
+
+=======
     if not content and not is_deleted:
         raise ValueError("Entry payload is missing 'content'.")
 
+>>>>>>> production
     entry, created = Entry.objects.get_or_create(
         fqid=entry_fqid,
         defaults={
             "author": remote_author,
             "title": title,
+<<<<<<< plswork
+            "description": description,
+            "content": content_to_store,
+            "content_type": normalized_content_type,
+=======
             "content": content,
             "content_type": content_type,
+>>>>>>> production
             "visibility": visibility,
             "web": web,
             "is_deleted": is_deleted,
@@ -102,11 +180,22 @@ def handle_remote_entry_payload(payload: dict):
         if entry.title != title:
             entry.title = title
             changed = True
+<<<<<<< plswork
+        if entry.description != description:
+            entry.description = description
+            changed = True
+        if entry.content != content_to_store:
+            entry.content = content_to_store
+            changed = True
+        if entry.content_type != normalized_content_type:
+            entry.content_type = normalized_content_type
+=======
         if entry.content != content:
             entry.content = content
             changed = True
         if entry.content_type != content_type:
             entry.content_type = content_type
+>>>>>>> production
             changed = True
         if entry.visibility != visibility:
             entry.visibility = visibility
@@ -128,4 +217,11 @@ def handle_remote_entry_payload(payload: dict):
         if changed:
             entry.save()
 
+<<<<<<< plswork
+    # Materialize base64 image entries into HostedImage (skips for deleted entries).
+    if is_base64_image and not is_deleted:
+        _decode_and_store_hosted_image(entry)
+
+=======
+>>>>>>> production
     return entry, created

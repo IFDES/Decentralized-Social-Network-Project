@@ -300,6 +300,21 @@ class FriendsEntryCommentVisibilityApiTests(TestCase):
         hidden_response = self.client.get(self._comment_detail_url(self.owner_comment))
         self.assertEqual(hidden_response.status_code, 404)
 
+    def test_non_friend_commenter_can_delete_own_comment_without_session(self):
+        """DELETE must resolve the comment without session-based visibility (payload actor)."""
+        from unittest.mock import patch
+
+        url = self._comment_detail_url(self.stranger_comment)
+        with patch("interactions.views.distribute_comment_delete_to_remote") as mock_distribute:
+            response = self.client.delete(
+                url,
+                data=json.dumps({"authorId": str(self.stranger_commenter.uuid)}),
+                content_type="application/json",
+            )
+        self.assertEqual(response.status_code, 204)
+        mock_distribute.assert_called_once()
+        self.assertFalse(Comment.objects.filter(pk=self.stranger_comment.pk).exists())
+
     def test_non_friend_commenter_cannot_access_hidden_comment_likes_endpoint(self):
         self.client.force_login(self.stranger_commenter_user)
 
@@ -932,4 +947,883 @@ class CommentLikeUIDistributionTests(TestCase):
             CommentLike.objects.filter(author=self.local_liker, comment=self.comment).exists()
         )
         mock_distribute.assert_called_once()
+
+
+# ===========================================================================
+# Commented API  (api/authors/{SERIAL}/commented)
+# ===========================================================================
+
+
+class AuthorCommentedListApiTests(TestCase):
+    """Tests for GET /api/authors/{SERIAL}/commented"""
+
+    def setUp(self):
+        self.client = Client()
+        self.author_a = Author.objects.create(display_name="Author A")
+        self.author_b = Author.objects.create(display_name="Author B")
+        self.entry = Entry.objects.create(author=self.author_b, content="Hello")
+
+    def _url(self, author=None):
+        author = author or self.author_a
+        return reverse("entries:author-commented-api", args=[author.uuid])
+
+    def test_get_empty(self):
+        response = self.client.get(self._url())
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["type"], "comments")
+        self.assertEqual(payload["count"], 0)
+        self.assertEqual(payload["src"], [])
+
+    def test_get_returns_comments_by_this_author_only(self):
+        Comment.objects.create(author=self.author_a, entry=self.entry, comment="A's comment")
+        Comment.objects.create(author=self.author_b, entry=self.entry, comment="B's comment")
+
+        response = self.client.get(self._url())
+        payload = response.json()
+        self.assertEqual(payload["count"], 1)
+        self.assertEqual(payload["src"][0]["comment"], "A's comment")
+
+    def test_get_response_envelope_shape(self):
+        Comment.objects.create(author=self.author_a, entry=self.entry, comment="Shape test")
+        response = self.client.get(self._url())
+        payload = response.json()
+
+        self.assertEqual(payload["type"], "comments")
+        self.assertIn("/api/authors/", payload["id"])
+        self.assertIn("/commented", payload["id"])
+        self.assertIn("page_number", payload)
+        self.assertIn("size", payload)
+        self.assertIn("count", payload)
+        self.assertIn("src", payload)
+
+    def test_get_pagination(self):
+        for i in range(12):
+            Comment.objects.create(author=self.author_a, entry=self.entry, comment=f"c{i}")
+
+        response = self.client.get(f"{self._url()}?page=2&size=5")
+        payload = response.json()
+        self.assertEqual(payload["page_number"], 2)
+        self.assertEqual(payload["size"], 5)
+        self.assertEqual(payload["count"], 12)
+        self.assertEqual(len(payload["src"]), 5)
+
+    def test_get_404_nonexistent_author(self):
+        url = reverse("entries:author-commented-api", args=["00000000-0000-0000-0000-000000000000"])
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 404)
+
+    def test_unsupported_method_returns_405(self):
+        response = self.client.put(self._url(), content_type="application/json")
+        self.assertEqual(response.status_code, 405)
+
+
+class AuthorCommentedPostApiTests(TestCase):
+    """Tests for POST /api/authors/{SERIAL}/commented"""
+
+    def setUp(self):
+        self.client = Client()
+        self.commenter = Author.objects.create(display_name="Commenter")
+        self.entry_author = Author.objects.create(display_name="Entry Author")
+        self.entry = Entry.objects.create(author=self.entry_author, content="Post")
+
+        self.user = User.objects.create_user(username="commenter_user", password="pass12345")
+        AuthorAccount.objects.create(user=self.user, author=self.commenter)
+
+    def _url(self):
+        return reverse("entries:author-commented-api", args=[self.commenter.uuid])
+
+    def test_post_with_entry_uuid(self):
+        self.client.force_login(self.user)
+        response = self.client.post(
+            self._url(),
+            data=json.dumps({
+                "entry": str(self.entry.uuid),
+                "comment": "Via UUID",
+                "contentType": "text/plain",
+            }),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 201)
+        payload = response.json()
+        self.assertEqual(payload["type"], "comment")
+        self.assertEqual(payload["comment"], "Via UUID")
+
+    def test_post_with_entry_fqid(self):
+        self.client.force_login(self.user)
+        response = self.client.post(
+            self._url(),
+            data=json.dumps({
+                "entry": self.entry.fqid,
+                "comment": "Via FQID",
+                "contentType": "text/markdown",
+            }),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 201)
+        payload = response.json()
+        self.assertEqual(payload["comment"], "Via FQID")
+        self.assertEqual(payload["contentType"], "text/markdown")
+
+    def test_post_requires_entry_field(self):
+        self.client.force_login(self.user)
+        response = self.client.post(
+            self._url(),
+            data=json.dumps({"comment": "No entry"}),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 400)
+
+    def test_post_requires_comment_text(self):
+        self.client.force_login(self.user)
+        response = self.client.post(
+            self._url(),
+            data=json.dumps({"entry": str(self.entry.uuid), "comment": ""}),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 400)
+
+    def test_post_returns_404_for_nonexistent_entry(self):
+        self.client.force_login(self.user)
+        response = self.client.post(
+            self._url(),
+            data=json.dumps({
+                "entry": "00000000-0000-0000-0000-000000000000",
+                "comment": "Orphan",
+            }),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 404)
+
+    def test_post_returns_400_for_deleted_entry(self):
+        from datetime import datetime, timezone as tz
+        self.entry.is_deleted = True
+        self.entry.visibility = "DELETED"
+        self.entry.deleted_at = datetime.now(tz.utc)
+        self.entry.save()
+
+        self.client.force_login(self.user)
+        response = self.client.post(
+            self._url(),
+            data=json.dumps({
+                "entry": str(self.entry.uuid),
+                "comment": "Should fail",
+            }),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 400)
+
+    def test_post_returns_400_for_invalid_content_type(self):
+        self.client.force_login(self.user)
+        response = self.client.post(
+            self._url(),
+            data=json.dumps({
+                "entry": str(self.entry.uuid),
+                "comment": "Bad CT",
+                "contentType": "application/pdf",
+            }),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 400)
+
+    def test_post_triggers_distribution(self):
+        from unittest.mock import patch
+
+        self.client.force_login(self.user)
+        with patch("interactions.views.distribute_comment_to_remote") as mock_dist:
+            response = self.client.post(
+                self._url(),
+                data=json.dumps({
+                    "entry": str(self.entry.uuid),
+                    "comment": "Distribute me",
+                }),
+                content_type="application/json",
+            )
+        self.assertEqual(response.status_code, 201)
+        mock_dist.assert_called_once()
+
+    def test_post_returns_400_when_author_unresolvable(self):
+        response = self.client.post(
+            self._url(),
+            data=json.dumps({
+                "entry": str(self.entry.uuid),
+                "comment": "No author",
+            }),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 400)
+
+
+class AuthorCommentedDetailApiTests(TestCase):
+    """Tests for GET /api/authors/{SERIAL}/commented/{SERIAL}"""
+
+    def setUp(self):
+        self.client = Client()
+        self.author = Author.objects.create(display_name="Commenter")
+        self.other_author = Author.objects.create(display_name="Other")
+        self.entry = Entry.objects.create(
+            author=Author.objects.create(display_name="EO"),
+            content="X",
+        )
+        self.comment = Comment.objects.create(
+            author=self.author, entry=self.entry, comment="Detail test"
+        )
+
+    def _url(self, author=None, comment=None):
+        return reverse(
+            "entries:author-commented-detail-api",
+            args=[(author or self.author).uuid, (comment or self.comment).uuid],
+        )
+
+    def test_get_returns_comment(self):
+        response = self.client.get(self._url())
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["type"], "comment")
+        self.assertEqual(payload["comment"], "Detail test")
+
+    def test_get_404_wrong_author(self):
+        response = self.client.get(self._url(author=self.other_author))
+        self.assertEqual(response.status_code, 404)
+
+    def test_get_404_nonexistent_comment(self):
+        url = reverse(
+            "entries:author-commented-detail-api",
+            args=[self.author.uuid, "00000000-0000-0000-0000-000000000000"],
+        )
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 404)
+
+    def test_only_get_allowed(self):
+        response = self.client.delete(self._url())
+        self.assertEqual(response.status_code, 405)
+
+
+# ===========================================================================
+# Commented-Likes API  (api/authors/{SERIAL}/commented/{SERIAL}/likes)
+# ===========================================================================
+
+
+class CommentedLikesApiTests(TestCase):
+    """Tests for GET/POST/DELETE /api/authors/{SERIAL}/commented/{SERIAL}/likes"""
+
+    def setUp(self):
+        self.client = Client()
+        self.comment_author = Author.objects.create(display_name="Comment Author")
+        self.liker = Author.objects.create(display_name="Liker")
+        self.entry = Entry.objects.create(
+            author=Author.objects.create(display_name="EO"),
+            content="Post",
+        )
+        self.comment = Comment.objects.create(
+            author=self.comment_author, entry=self.entry, comment="Likeable"
+        )
+
+    def _url(self):
+        return reverse(
+            "entries:commented-likes-api",
+            args=[self.comment_author.uuid, self.comment.uuid],
+        )
+
+    def test_get_empty_likes(self):
+        response = self.client.get(self._url())
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["type"], "likes")
+        self.assertEqual(payload["count"], 0)
+        self.assertEqual(payload["src"], [])
+
+    def test_get_likes_envelope_shape(self):
+        CommentLike.objects.create(author=self.liker, comment=self.comment)
+        response = self.client.get(self._url())
+        payload = response.json()
+        self.assertEqual(payload["type"], "likes")
+        self.assertIn("id", payload)
+        self.assertIn("web", payload)
+        self.assertIn("/commented/", payload["id"])
+        self.assertIn("/likes", payload["id"])
+        self.assertEqual(payload["count"], 1)
+
+    def test_post_creates_like(self):
+        response = self.client.post(
+            self._url(),
+            data=json.dumps({"authorId": str(self.liker.uuid)}),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 201)
+        payload = response.json()
+        self.assertEqual(payload["type"], "like")
+        self.assertTrue(CommentLike.objects.filter(author=self.liker, comment=self.comment).exists())
+
+    def test_post_idempotent(self):
+        self.client.post(
+            self._url(),
+            data=json.dumps({"authorId": str(self.liker.uuid)}),
+            content_type="application/json",
+        )
+        response = self.client.post(
+            self._url(),
+            data=json.dumps({"authorId": str(self.liker.uuid)}),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(CommentLike.objects.filter(author=self.liker, comment=self.comment).count(), 1)
+
+    def test_post_triggers_distribution(self):
+        from unittest.mock import patch
+
+        with patch("interactions.views.distribute_comment_like_to_remote") as mock_dist:
+            response = self.client.post(
+                self._url(),
+                data=json.dumps({"authorId": str(self.liker.uuid)}),
+                content_type="application/json",
+            )
+        self.assertEqual(response.status_code, 201)
+        mock_dist.assert_called_once()
+
+    def test_delete_removes_like(self):
+        CommentLike.objects.create(author=self.liker, comment=self.comment)
+        response = self.client.delete(
+            self._url(),
+            data=json.dumps({"authorId": str(self.liker.uuid)}),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 204)
+        self.assertFalse(CommentLike.objects.filter(author=self.liker, comment=self.comment).exists())
+
+    def test_delete_triggers_distribution(self):
+        from unittest.mock import patch
+
+        CommentLike.objects.create(author=self.liker, comment=self.comment)
+        with patch("interactions.views.distribute_comment_like_delete_to_remote") as mock_dist:
+            self.client.delete(
+                self._url(),
+                data=json.dumps({"authorId": str(self.liker.uuid)}),
+                content_type="application/json",
+            )
+        mock_dist.assert_called_once()
+
+    def test_post_requires_author(self):
+        response = self.client.post(
+            self._url(), data=json.dumps({}), content_type="application/json"
+        )
+        self.assertEqual(response.status_code, 400)
+
+    def test_get_returns_400_when_parent_entry_deleted(self):
+        from datetime import datetime, timezone as tz
+        self.entry.is_deleted = True
+        self.entry.visibility = "DELETED"
+        self.entry.deleted_at = datetime.now(tz.utc)
+        self.entry.save()
+
+        response = self.client.get(self._url())
+        self.assertEqual(response.status_code, 400)
+
+    def test_get_pagination(self):
+        for i in range(7):
+            a = Author.objects.create(display_name=f"L{i}")
+            CommentLike.objects.create(author=a, comment=self.comment)
+
+        response = self.client.get(f"{self._url()}?page=1&size=3")
+        payload = response.json()
+        self.assertEqual(payload["count"], 7)
+        self.assertEqual(len(payload["src"]), 3)
+        self.assertEqual(payload["page_number"], 1)
+
+
+# ===========================================================================
+# Liked API  (api/authors/{SERIAL}/liked)
+# ===========================================================================
+
+
+class AuthorLikedListApiTests(TestCase):
+    """Tests for GET /api/authors/{SERIAL}/liked"""
+
+    def setUp(self):
+        self.client = Client()
+        self.author = Author.objects.create(display_name="Liker")
+        self.other_author = Author.objects.create(display_name="Other")
+        self.entry_owner = Author.objects.create(display_name="EO")
+        self.entry = Entry.objects.create(author=self.entry_owner, content="Post")
+        self.comment = Comment.objects.create(
+            author=self.entry_owner, entry=self.entry, comment="Cm"
+        )
+
+    def _url(self, author=None):
+        return reverse("entries:author-liked-api", args=[(author or self.author).uuid])
+
+    def test_get_empty(self):
+        response = self.client.get(self._url())
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["type"], "likes")
+        self.assertEqual(payload["count"], 0)
+        self.assertEqual(payload["src"], [])
+
+    def test_get_includes_entry_likes(self):
+        EntryLike.objects.create(author=self.author, entry=self.entry)
+        response = self.client.get(self._url())
+        payload = response.json()
+        self.assertEqual(payload["count"], 1)
+        self.assertEqual(payload["src"][0]["type"], "like")
+        self.assertIn("/entries/", payload["src"][0]["object"])
+
+    def test_get_includes_comment_likes(self):
+        CommentLike.objects.create(author=self.author, comment=self.comment)
+        response = self.client.get(self._url())
+        payload = response.json()
+        self.assertEqual(payload["count"], 1)
+        self.assertEqual(payload["src"][0]["type"], "like")
+        self.assertIn("/commented/", payload["src"][0]["object"])
+
+    def test_get_merges_entry_and_comment_likes(self):
+        EntryLike.objects.create(author=self.author, entry=self.entry)
+        CommentLike.objects.create(author=self.author, comment=self.comment)
+        response = self.client.get(self._url())
+        payload = response.json()
+        self.assertEqual(payload["count"], 2)
+
+    def test_get_only_returns_this_authors_likes(self):
+        EntryLike.objects.create(author=self.author, entry=self.entry)
+        EntryLike.objects.create(author=self.other_author, entry=self.entry)
+        response = self.client.get(self._url())
+        self.assertEqual(response.json()["count"], 1)
+
+    def test_get_envelope_shape(self):
+        EntryLike.objects.create(author=self.author, entry=self.entry)
+        response = self.client.get(self._url())
+        payload = response.json()
+        self.assertEqual(payload["type"], "likes")
+        self.assertIn("/api/authors/", payload["id"])
+        self.assertIn("/liked", payload["id"])
+        self.assertIn("page_number", payload)
+        self.assertIn("size", payload)
+        self.assertIn("count", payload)
+        self.assertIn("src", payload)
+
+    def test_get_pagination(self):
+        for i in range(8):
+            e = Entry.objects.create(author=self.entry_owner, content=f"e{i}")
+            EntryLike.objects.create(author=self.author, entry=e)
+
+        response = self.client.get(f"{self._url()}?page=2&size=3")
+        payload = response.json()
+        self.assertEqual(payload["count"], 8)
+        self.assertEqual(payload["page_number"], 2)
+        self.assertEqual(len(payload["src"]), 3)
+
+    def test_get_404_nonexistent_author(self):
+        url = reverse("entries:author-liked-api", args=["00000000-0000-0000-0000-000000000000"])
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 404)
+
+
+class AuthorLikedDetailApiTests(TestCase):
+    """Tests for GET /api/authors/{SERIAL}/liked/{SERIAL}"""
+
+    def setUp(self):
+        self.client = Client()
+        self.author = Author.objects.create(display_name="Liker")
+        self.other_author = Author.objects.create(display_name="Other")
+        self.entry_owner = Author.objects.create(display_name="EO")
+        self.entry = Entry.objects.create(author=self.entry_owner, content="Post")
+        self.comment = Comment.objects.create(
+            author=self.entry_owner, entry=self.entry, comment="Cm"
+        )
+
+    def test_get_entry_like(self):
+        el = EntryLike.objects.create(author=self.author, entry=self.entry)
+        url = reverse("entries:author-liked-detail-api", args=[self.author.uuid, el.uuid])
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["type"], "like")
+        self.assertIn("/entries/", payload["object"])
+
+    def test_get_comment_like(self):
+        cl = CommentLike.objects.create(author=self.author, comment=self.comment)
+        url = reverse("entries:author-liked-detail-api", args=[self.author.uuid, cl.uuid])
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["type"], "like")
+        self.assertIn("/commented/", payload["object"])
+
+    def test_get_404_nonexistent_like(self):
+        url = reverse(
+            "entries:author-liked-detail-api",
+            args=[self.author.uuid, "00000000-0000-0000-0000-000000000000"],
+        )
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 404)
+
+    def test_get_404_wrong_author(self):
+        el = EntryLike.objects.create(author=self.author, entry=self.entry)
+        url = reverse("entries:author-liked-detail-api", args=[self.other_author.uuid, el.uuid])
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 404)
+
+
+# ===========================================================================
+# FQID Shortcut Routes
+# ===========================================================================
+
+
+class FQIDShortcutTests(TestCase):
+    """Tests for FQID-based lookup endpoints."""
+
+    def setUp(self):
+        self.client = Client()
+        self.author = Author.objects.create(display_name="A")
+        self.liker = Author.objects.create(display_name="L")
+        self.entry = Entry.objects.create(author=self.author, content="Hello")
+        self.comment = Comment.objects.create(
+            author=self.author, entry=self.entry, comment="C"
+        )
+        self.entry_like = EntryLike.objects.create(author=self.liker, entry=self.entry)
+        self.comment_like = CommentLike.objects.create(author=self.liker, comment=self.comment)
+
+    def test_entry_fqid_comments(self):
+        from urllib.parse import quote
+        url = f"/api/entries/{quote(self.entry.fqid, safe='')}/comments"
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["type"], "comments")
+        self.assertEqual(payload["count"], 1)
+
+    def test_entry_fqid_comments_404_nonexistent(self):
+        from urllib.parse import quote
+        fake_fqid = "http://127.0.0.1:8000/api/authors/00000000-0000-0000-0000-000000000000/entries/00000000-0000-0000-0000-000000000000"
+        url = f"/api/entries/{quote(fake_fqid, safe='')}/comments"
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 404)
+
+    def test_entry_fqid_likes(self):
+        from urllib.parse import quote
+        url = f"/api/entries/{quote(self.entry.fqid, safe='')}/likes"
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["type"], "likes")
+        self.assertEqual(payload["count"], 1)
+
+    def test_commented_fqid(self):
+        from urllib.parse import quote
+        url = f"/api/commented/{quote(self.comment.fqid, safe='')}"
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["type"], "comment")
+        self.assertEqual(payload["comment"], "C")
+
+    def test_commented_fqid_404_nonexistent(self):
+        from urllib.parse import quote
+        fake = "http://127.0.0.1:8000/api/authors/00000000-0000-0000-0000-000000000000/commented/00000000-0000-0000-0000-000000000000"
+        url = f"/api/commented/{quote(fake, safe='')}"
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 404)
+
+    def test_liked_fqid_entry_like(self):
+        from urllib.parse import quote
+        url = f"/api/liked/{quote(self.entry_like.fqid, safe='')}"
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["type"], "like")
+        self.assertIn("/entries/", payload["object"])
+
+    def test_liked_fqid_comment_like(self):
+        from urllib.parse import quote
+        url = f"/api/liked/{quote(self.comment_like.fqid, safe='')}"
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["type"], "like")
+        self.assertIn("/commented/", payload["object"])
+
+    def test_liked_fqid_404_nonexistent(self):
+        from urllib.parse import quote
+        fake = "http://127.0.0.1:8000/api/authors/00000000-0000-0000-0000-000000000000/liked/00000000-0000-0000-0000-000000000000"
+        url = f"/api/liked/{quote(fake, safe='')}"
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 404)
+
+
+# ===========================================================================
+# Spec Object Shape Verification
+# ===========================================================================
+
+
+class CommentObjectShapeTests(TestCase):
+    """Verify that comment JSON matches the API spec object model."""
+
+    def setUp(self):
+        self.client = Client()
+        self.entry_author = Author.objects.create(display_name="Entry Author")
+        self.commenter = Author.objects.create(display_name="Commenter")
+        self.entry = Entry.objects.create(author=self.entry_author, content="Post")
+        self.comment = Comment.objects.create(
+            author=self.commenter, entry=self.entry, comment="Spec test"
+        )
+
+    def test_comment_json_has_all_required_fields(self):
+        """Spec: type, author, comment, contentType, published, id, entry, web, likes"""
+        url = reverse(
+            "entries:author-commented-detail-api",
+            args=[self.commenter.uuid, self.comment.uuid],
+        )
+        response = self.client.get(url)
+        payload = response.json()
+
+        required = ["type", "author", "comment", "contentType", "published", "id", "entry", "web", "likes"]
+        for field in required:
+            self.assertIn(field, payload, f"Missing field: {field}")
+
+    def test_comment_type_is_comment(self):
+        url = reverse(
+            "entries:author-commented-detail-api",
+            args=[self.commenter.uuid, self.comment.uuid],
+        )
+        payload = self.client.get(url).json()
+        self.assertEqual(payload["type"], "comment")
+
+    def test_comment_id_uses_commented_pattern(self):
+        """Comment id must be {BASE}/api/authors/{AUTHOR}/commented/{COMMENT}"""
+        url = reverse(
+            "entries:author-commented-detail-api",
+            args=[self.commenter.uuid, self.comment.uuid],
+        )
+        payload = self.client.get(url).json()
+        self.assertIn(f"/api/authors/{self.commenter.uuid}/commented/{self.comment.uuid}", payload["id"])
+
+    def test_comment_entry_is_entry_fqid(self):
+        url = reverse(
+            "entries:author-commented-detail-api",
+            args=[self.commenter.uuid, self.comment.uuid],
+        )
+        payload = self.client.get(url).json()
+        self.assertIn(f"/api/authors/{self.entry_author.uuid}/entries/{self.entry.uuid}", payload["entry"])
+
+    def test_comment_web_is_entry_web_url(self):
+        url = reverse(
+            "entries:author-commented-detail-api",
+            args=[self.commenter.uuid, self.comment.uuid],
+        )
+        payload = self.client.get(url).json()
+        self.assertIn(f"/authors/{self.entry_author.uuid}/entries/{self.entry.uuid}", payload["web"])
+        self.assertNotIn("/api/", payload["web"])
+
+    def test_comment_author_has_required_fields(self):
+        url = reverse(
+            "entries:author-commented-detail-api",
+            args=[self.commenter.uuid, self.comment.uuid],
+        )
+        payload = self.client.get(url).json()
+        author = payload["author"]
+        for field in ["type", "id", "host", "displayName", "web"]:
+            self.assertIn(field, author, f"Author missing field: {field}")
+        self.assertEqual(author["type"], "author")
+
+    def test_comment_nested_likes_object(self):
+        """Comment must include a nested likes object with type, id, web, page_number, size, count, src."""
+        CommentLike.objects.create(author=self.entry_author, comment=self.comment)
+
+        url = reverse(
+            "entries:author-commented-detail-api",
+            args=[self.commenter.uuid, self.comment.uuid],
+        )
+        payload = self.client.get(url).json()
+        likes = payload["likes"]
+        self.assertEqual(likes["type"], "likes")
+        self.assertIn("/commented/", likes["id"])
+        self.assertIn("/likes", likes["id"])
+        self.assertIn("web", likes)
+        self.assertEqual(likes["page_number"], 1)
+        self.assertEqual(likes["size"], 5)
+        self.assertEqual(likes["count"], 1)
+        self.assertEqual(len(likes["src"]), 1)
+        self.assertEqual(likes["src"][0]["type"], "like")
+
+    def test_comment_in_entry_comments_list_has_same_shape(self):
+        """Comments returned by GET .../entries/{SERIAL}/comments must have the same shape."""
+        url = reverse(
+            "entries:entry-comments-api",
+            args=[self.entry_author.uuid, self.entry.uuid],
+        )
+        payload = self.client.get(url).json()
+        comment = payload["src"][0]
+        for field in ["type", "author", "comment", "contentType", "published", "id", "entry", "web", "likes"]:
+            self.assertIn(field, comment, f"Comments list item missing field: {field}")
+        self.assertIn("/commented/", comment["id"])
+
+
+class LikeObjectShapeTests(TestCase):
+    """Verify that like JSON matches the API spec object model."""
+
+    def setUp(self):
+        self.client = Client()
+        self.author = Author.objects.create(display_name="Liker")
+        self.entry_author = Author.objects.create(display_name="EA")
+        self.entry = Entry.objects.create(author=self.entry_author, content="Post")
+        self.comment = Comment.objects.create(
+            author=self.entry_author, entry=self.entry, comment="Cm"
+        )
+
+    def test_entry_like_has_all_required_fields(self):
+        """Spec: type, author, published, id, object"""
+        el = EntryLike.objects.create(author=self.author, entry=self.entry)
+        url = reverse("entries:author-liked-detail-api", args=[self.author.uuid, el.uuid])
+        payload = self.client.get(url).json()
+        for field in ["type", "author", "published", "id", "object"]:
+            self.assertIn(field, payload, f"Missing field: {field}")
+
+    def test_entry_like_type_is_like(self):
+        el = EntryLike.objects.create(author=self.author, entry=self.entry)
+        url = reverse("entries:author-liked-detail-api", args=[self.author.uuid, el.uuid])
+        payload = self.client.get(url).json()
+        self.assertEqual(payload["type"], "like")
+
+    def test_entry_like_id_uses_liked_pattern(self):
+        """Like id must be {BASE}/api/authors/{AUTHOR}/liked/{LIKE}"""
+        el = EntryLike.objects.create(author=self.author, entry=self.entry)
+        url = reverse("entries:author-liked-detail-api", args=[self.author.uuid, el.uuid])
+        payload = self.client.get(url).json()
+        self.assertIn(f"/api/authors/{self.author.uuid}/liked/{el.uuid}", payload["id"])
+
+    def test_entry_like_object_is_entry_fqid(self):
+        el = EntryLike.objects.create(author=self.author, entry=self.entry)
+        url = reverse("entries:author-liked-detail-api", args=[self.author.uuid, el.uuid])
+        payload = self.client.get(url).json()
+        self.assertIn(f"/api/authors/{self.entry_author.uuid}/entries/{self.entry.uuid}", payload["object"])
+
+    def test_comment_like_object_is_comment_fqid(self):
+        cl = CommentLike.objects.create(author=self.author, comment=self.comment)
+        url = reverse("entries:author-liked-detail-api", args=[self.author.uuid, cl.uuid])
+        payload = self.client.get(url).json()
+        self.assertIn(f"/api/authors/{self.entry_author.uuid}/commented/{self.comment.uuid}", payload["object"])
+
+    def test_entry_like_in_list_has_same_shape(self):
+        """Likes returned by GET .../entries/{SERIAL}/likes must have the spec shape."""
+        EntryLike.objects.create(author=self.author, entry=self.entry)
+        url = reverse("entries:entry-likes-api", args=[self.entry_author.uuid, self.entry.uuid])
+        payload = self.client.get(url).json()
+        like = payload["src"][0]
+        for field in ["type", "author", "published", "id", "object"]:
+            self.assertIn(field, like, f"Likes list item missing field: {field}")
+        self.assertIn("/liked/", like["id"])
+
+    def test_like_author_has_required_fields(self):
+        el = EntryLike.objects.create(author=self.author, entry=self.entry)
+        url = reverse("entries:author-liked-detail-api", args=[self.author.uuid, el.uuid])
+        payload = self.client.get(url).json()
+        author = payload["author"]
+        for field in ["type", "id", "host", "displayName", "web"]:
+            self.assertIn(field, author, f"Author missing field: {field}")
+        self.assertEqual(author["type"], "author")
+
+
+# ===========================================================================
+# Existing endpoint gap-fills: likes pagination, comment deletion edge cases
+# ===========================================================================
+
+
+class EntryLikesPaginationTests(TestCase):
+    """Verify that entry likes pagination works correctly."""
+
+    def setUp(self):
+        self.client = Client()
+        self.entry_author = Author.objects.create(display_name="EA")
+        self.entry = Entry.objects.create(author=self.entry_author, content="P")
+
+    def test_likes_pagination(self):
+        for i in range(15):
+            a = Author.objects.create(display_name=f"L{i}")
+            EntryLike.objects.create(author=a, entry=self.entry)
+
+        url = reverse("entries:entry-likes-api", args=[self.entry_author.uuid, self.entry.uuid])
+        response = self.client.get(f"{url}?page=2&size=5")
+        payload = response.json()
+        self.assertEqual(payload["count"], 15)
+        self.assertEqual(payload["page_number"], 2)
+        self.assertEqual(len(payload["src"]), 5)
+
+    def test_likes_default_pagination(self):
+        for i in range(3):
+            a = Author.objects.create(display_name=f"L{i}")
+            EntryLike.objects.create(author=a, entry=self.entry)
+
+        url = reverse("entries:entry-likes-api", args=[self.entry_author.uuid, self.entry.uuid])
+        response = self.client.get(url)
+        payload = response.json()
+        self.assertEqual(payload["page_number"], 1)
+        self.assertEqual(payload["size"], 10)
+        self.assertEqual(payload["count"], 3)
+        self.assertEqual(len(payload["src"]), 3)
+
+
+class CommentDeleteWithoutVisibilityTests(TestCase):
+    """
+    Verify that a comment author can delete their comment even when
+    the comment-list visibility filter would exclude it (the fix from the
+    earlier conversation). This is the core regression test.
+    """
+
+    def setUp(self):
+        self.client = Client()
+        self.owner = Author.objects.create(display_name="Entry Owner")
+        self.commenter = Author.objects.create(display_name="Commenter")
+        self.entry = Entry.objects.create(
+            author=self.owner, content="Friends post",
+            visibility=Entry.VISIBILITY_FRIENDS,
+        )
+        self.comment = Comment.objects.create(
+            author=self.commenter, entry=self.entry, comment="My comment"
+        )
+
+    def test_comment_author_can_delete_own_comment_after_losing_visibility(self):
+        """
+        The commenter is not a friend and cannot see comments on a FRIENDS
+        entry, but must still be able to delete their own comment.
+        """
+        from unittest.mock import patch
+
+        url = reverse(
+            "entries:entry-comment-detail-api",
+            args=[self.owner.uuid, self.entry.uuid, str(self.comment.uuid)],
+        )
+        with patch("interactions.views.distribute_comment_delete_to_remote"):
+            response = self.client.delete(
+                url,
+                data=json.dumps({"authorId": str(self.commenter.uuid)}),
+                content_type="application/json",
+            )
+        self.assertEqual(response.status_code, 204)
+        self.assertFalse(Comment.objects.filter(pk=self.comment.pk).exists())
+
+    def test_non_author_cannot_delete_comment(self):
+        other = Author.objects.create(display_name="Impersonator")
+        url = reverse(
+            "entries:entry-comment-detail-api",
+            args=[self.owner.uuid, self.entry.uuid, str(self.comment.uuid)],
+        )
+        response = self.client.delete(
+            url,
+            data=json.dumps({"authorId": str(other.uuid)}),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 403)
+        self.assertTrue(Comment.objects.filter(pk=self.comment.pk).exists())
+
+    def test_delete_nonexistent_comment_returns_404(self):
+        url = reverse(
+            "entries:entry-comment-detail-api",
+            args=[self.owner.uuid, self.entry.uuid, "00000000-0000-0000-0000-000000000000"],
+        )
+        response = self.client.delete(
+            url,
+            data=json.dumps({"authorId": str(self.commenter.uuid)}),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 404)
 
