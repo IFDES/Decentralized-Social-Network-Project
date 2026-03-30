@@ -102,11 +102,12 @@ def follow_ui_page(request: HttpRequest) -> HttpResponse:
         .order_by("display_name")
     )
 
-    for x in reversed(range(len(local_authors))):
-        authorObj = AuthorAccount.objects.get(author=local_authors[x])
-        user = authorObj.user
-        if not user.is_active:
-            local_authors.pop(x)
+    if len(local_authors) > 0:
+        for x in reversed(range(len(local_authors))):
+            authorObj = AuthorAccount.objects.get(author=local_authors[x])
+            user = authorObj.user
+            if not user.is_active:
+                local_authors.pop(x)
 
     outgoing_rels = list(
         FollowRelationship.objects.filter(
