@@ -198,6 +198,7 @@ def follow_to_json(rel: FollowRelationship) -> dict:
     return {
         "type": "follow",
         "summary": f"{rel.follower.display_name} wants to follow {rel.followee.display_name}",
+        "state": "requesting",
         "actor": author_to_json(rel.follower),
         "object": author_to_json(rel.followee),
     }
