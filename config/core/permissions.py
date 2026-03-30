@@ -95,3 +95,26 @@ def require_node_auth(view_func):
         return response
 
     return wrapper
+
+
+def require_admin_user(view_func):
+    """
+    Decorator for local admin-only API endpoints.
+
+    Returns:
+        401 — unauthenticated caller
+        403 — authenticated but not admin (staff/superuser)
+    """
+    @wraps(view_func)
+    def wrapper(request, *args, **kwargs):
+        user = getattr(request, "user", None)
+
+        if not user or not getattr(user, "is_authenticated", False):
+            return JsonResponse({"error": "Authentication required."}, status=401)
+
+        if not (getattr(user, "is_staff", False) or getattr(user, "is_superuser", False)):
+            return JsonResponse({"error": "Admin privileges required."}, status=403)
+
+        return view_func(request, *args, **kwargs)
+
+    return wrapper
