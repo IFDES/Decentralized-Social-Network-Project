@@ -391,10 +391,7 @@ def _stream_entries_queryset(request: HttpRequest | None = None):
     )
 
     return base.filter(
-        (
-            Q(visibility=Entry.VISIBILITY_PUBLIC)
-            & (Q(author__is_local=True) | Q(author_id__in=following_ids))
-        )
+        Q(visibility=Entry.VISIBILITY_PUBLIC)
         | (
             Q(visibility=Entry.VISIBILITY_UNLISTED)
             & Q(author_id__in=following_ids)

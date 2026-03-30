@@ -25,15 +25,29 @@ from .services import (
     get_or_fetch_author_by_fqid,
 )
 
+def follow_request_to_json(rel: FollowRelationship) -> dict:
+    return {
+        "type": "follow",
+        "summary": f"{rel.follower.display_name} wants to follow {rel.followee.display_name}",
+        "state": "requesting",
+        "actor": author_to_json(rel.follower),
+        "object": author_to_json(rel.followee),
+    }
 
 def _create_or_rerequest_follow(me: Author, followee: Author) -> tuple[FollowRelationship, bool]:
     if me.pk == followee.pk:
         raise ValueError("You cannot follow yourself.")
 
+    desired_status = (
+        FollowRelationship.Status.PENDING
+        if getattr(followee, "is_local", True)
+        else FollowRelationship.Status.APPROVED
+    )
+
     rel, created = FollowRelationship.objects.get_or_create(
         follower=me,
         followee=followee,
-        defaults={"status": FollowRelationship.Status.PENDING},
+        defaults={"status": desired_status},
     )
 
     should_send = False
@@ -41,7 +55,7 @@ def _create_or_rerequest_follow(me: Author, followee: Author) -> tuple[FollowRel
     if created:
         should_send = True
     elif rel.status == FollowRelationship.Status.DENIED:
-        rel.status = FollowRelationship.Status.PENDING
+        rel.status = desired_status
         rel.save(update_fields=["status", "updated_at"])
         should_send = True
 
@@ -247,14 +261,12 @@ def follow_remote_author_ui(request: HttpRequest) -> HttpResponse:
 
     if should_send:
         try:
-            distribute_follow_request(rel, follow_to_json(rel))
+            distribute_follow_request(rel, follow_request_to_json(rel))
         except ValueError as exc:
-            if rel.status == FollowRelationship.Status.PENDING:
-                rel.delete()
+            rel.delete()
             return HttpResponseBadRequest(str(exc))
         except ConnectionError as exc:
-            if rel.status == FollowRelationship.Status.PENDING:
-                rel.delete()
+            rel.delete()
             return HttpResponseBadRequest(str(exc))
 
     return redirect("follows:follow-ui")
@@ -397,14 +409,12 @@ def following_detail(request: HttpRequest, author_serial, foreign_author_fqid):
 
         if not getattr(followee, "is_local", True) and should_send:
             try:
-                distribute_follow_request(rel, follow_to_json(rel))
+                distribute_follow_request(rel, follow_request_to_json(rel))
             except ValueError as exc:
-                if rel.status == FollowRelationship.Status.PENDING:
-                    rel.delete()
+                rel.delete()
                 return JsonResponse({"detail": str(exc)}, status=400)
             except ConnectionError as exc:
-                if rel.status == FollowRelationship.Status.PENDING:
-                    rel.delete()
+                rel.delete()
                 return JsonResponse({"detail": str(exc)}, status=502)
 
         return JsonResponse(follow_to_json(rel), status=201 if should_send else 200)
