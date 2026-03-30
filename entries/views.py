@@ -186,15 +186,14 @@ def _should_ingest_remote_entry_for_viewer(entry_payload: dict, remote_author: A
     if visibility == Entry.VISIBILITY_PUBLIC:
         return True
 
-    # if visibility == Entry.VISIBILITY_UNLISTED:
-    #     return FollowRelationship.objects.filter(
-    #         follower=viewer,
-    #         followee=remote_author,
-    #         status=FollowRelationship.Status.APPROVED,
-    #     ).exists()
-
     if visibility == Entry.VISIBILITY_UNLISTED:
-        return False
+        if viewer is None:
+            return False
+        return FollowRelationship.objects.filter(
+            follower=viewer,
+            followee=remote_author,
+            status=FollowRelationship.Status.APPROVED,
+        ).exists()
 
     if visibility == Entry.VISIBILITY_FRIENDS:
         return False

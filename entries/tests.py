@@ -426,6 +426,85 @@ class StreamApiTests(TestCase):
         self.assertEqual(found.get("contentType"), "Image")
         self.assertEqual(found.get("content"), png_base64)
 
+    def test_stream_pulls_unlisted_for_followed_remote_author(self):
+        """
+        If the viewer follows a remote author (APPROVED), remote UNLISTED entries
+        should be pulled/ingested and appear in stream.
+        """
+        from unittest.mock import patch
+        from config.core.models import RemoteNode
+
+        remote_author = Author.objects.create(
+            display_name="Remote Author",
+            fqid="https://remote.example/api/authors/ra-1",
+            host="https://remote.example/api/",
+            web="https://remote.example/authors/ra-1",
+            is_local=False,
+        )
+        RemoteNode.objects.create(
+            display_name="Remote",
+            base_url="https://remote.example",
+            outgoing_username="us",
+            outgoing_password="pw",
+        )
+        FollowRelationship.objects.create(
+            follower=self.author,  # stream_owner's author
+            followee=remote_author,
+            status=FollowRelationship.Status.APPROVED,
+        )
+
+        self.client.login(username="stream_owner", password="passA12345")
+
+        remote_unlisted_entry_fqid = "https://remote.example/api/authors/ra-1/entries/e-unl-1"
+        remote_public_entry_fqid = "https://remote.example/api/authors/ra-1/entries/e-pub-1"
+
+        remote_author_json = {
+            "type": "author",
+            "id": remote_author.fqid,
+            "host": remote_author.host,
+            "displayName": remote_author.display_name,
+            "web": remote_author.web,
+            "github": "",
+            "profileImage": "",
+        }
+
+        remote_entries_payload = {
+            "type": "entries",
+            "page_number": 1,
+            "size": 10,
+            "count": 2,
+            "src": [
+                {
+                    "type": "entry",
+                    "id": remote_public_entry_fqid,
+                    "title": "Remote public",
+                    "content": "pub",
+                    "contentType": "text/plain",
+                    "visibility": "PUBLIC",
+                    "author": remote_author_json,
+                    "published": "2026-03-30T00:00:00+00:00",
+                },
+                {
+                    "type": "entry",
+                    "id": remote_unlisted_entry_fqid,
+                    "title": "Remote unlisted",
+                    "content": "unl",
+                    "contentType": "text/plain",
+                    "visibility": "UNLISTED",
+                    "author": remote_author_json,
+                    "published": "2026-03-30T00:00:01+00:00",
+                },
+            ],
+        }
+
+        with patch("entries.views._get_json_basic_auth", return_value=(200, remote_entries_payload)):
+            resp = self.client.get(reverse("entries:stream-api"))
+            self.assertEqual(resp.status_code, 200)
+            data = resp.json()
+            returned_ids = [it["id"] for it in data.get("src") or []]
+            self.assertIn(remote_public_entry_fqid, returned_ids)
+            self.assertIn(remote_unlisted_entry_fqid, returned_ids)
+
     def test_stream_returns_latest_edited_version_once(self):
         entry = Entry.objects.create(
             author=self.author,
