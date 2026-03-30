@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Sign Up - Social Distribution</title>
+  <title>Log in - Social Distribution</title>
   <style>
     * {
       margin: 0;
@@ -58,7 +58,7 @@
     }
 
     /* Centered dominant layout */
-    .signup-container {
+    .login-container {
       display: flex;
       align-items: center;
       justify-content: center;
@@ -101,20 +101,6 @@
       margin-bottom: 20px;
       color: #dc2626;
       font-size: 0.9rem;
-    }
-
-    .error-message ul {
-      list-style: none;
-      margin: 0;
-      padding: 0;
-    }
-
-    .error-message li {
-      margin-bottom: 4px;
-    }
-
-    .error-message li:last-child {
-      margin-bottom: 0;
     }
 
     .form-group {
@@ -193,20 +179,20 @@
       background: #2d0a7f;
     }
 
-    .login-section {
+    .signup-section {
       margin-top: 24px;
       padding-top: 24px;
       border-top: 1px solid #e5e7eb;
       text-align: center;
     }
 
-    .login-text {
+    .signup-text {
       color: #6b7280;
       font-size: 0.95rem;
       margin-bottom: 12px;
     }
 
-    .login-link {
+    .signup-link {
       display: inline-block;
       padding: 10px 24px;
       background: #f3f4f6;
@@ -218,7 +204,7 @@
       min-height: 44px;
     }
 
-    .login-link:hover {
+    .signup-link:hover {
       background: #e5e7eb;
     }
 
@@ -235,7 +221,7 @@
         font-size: 20px;
       }
 
-      .signup-container {
+      .login-container {
         padding: 80px 16px 40px;
       }
 
@@ -277,26 +263,24 @@
   </div>
 
   <!-- Centered dominant form -->
-  <div class="signup-container">
+  <div class="login-container">
     <div class="form-container">
       <div class="form-header">
-        <h2 class="form-title">Create your account</h2>
-        <p class="form-subtitle">Join Social Distribution and start sharing</p>
+        <h2 class="form-title">Welcome back</h2>
+        <p class="form-subtitle">Log in to your account to continue</p>
       </div>
 
-      {% if form.errors %}
+      {% if form.errors or form.non_field_errors %}
       <div class="error-message">
-        <ul>
-          {% for field, errs in form.errors.items %}
-            {% for e in errs %}
-              <li>{{ e }}</li>
-            {% endfor %}
-          {% endfor %}
-        </ul>
+        {% if form.non_field_errors %}
+          {{ form.non_field_errors.0 }}
+        {% else %}
+          Please correct the errors below.
+        {% endif %}
       </div>
       {% endif %}
 
-      <form method="post">
+      <form method="post" action="{% url 'login' %}">
         {% csrf_token %}
 
         <div class="form-group">
@@ -306,7 +290,6 @@
             name="username"
             id="id_username"
             class="form-input"
-            maxlength="150"
             value="{{ form.username.value|default:'' }}"
             required
             autofocus
@@ -314,32 +297,19 @@
         </div>
 
         <div class="form-group">
-          <label for="id_display_name" class="form-label">Display name</label>
-          <input
-            type="text"
-            name="display_name"
-            id="id_display_name"
-            class="form-input"
-            maxlength="120"
-            value="{{ form.display_name.value|default:'' }}"
-            required
-          />
-        </div>
-
-        <div class="form-group">
-          <label for="id_password1" class="form-label">Password</label>
+          <label for="id_password" class="form-label">Password</label>
           <div class="password-wrapper">
             <input
               type="password"
-              name="password1"
-              id="id_password1"
+              name="password"
+              id="id_password"
               class="form-input"
               required
             />
             <button
               type="button"
               class="password-toggle"
-              id="togglePassword1"
+              id="togglePassword"
               aria-label="Toggle password visibility"
             >
               👁️
@@ -347,75 +317,36 @@
           </div>
         </div>
 
-        <div class="form-group">
-          <label for="id_password2" class="form-label">Confirm password</label>
-          <div class="password-wrapper">
-            <input
-              type="password"
-              name="password2"
-              id="id_password2"
-              class="form-input"
-              required
-            />
-            <button
-              type="button"
-              class="password-toggle"
-              id="togglePassword2"
-              aria-label="Toggle password visibility"
-            >
-              👁️
-            </button>
-          </div>
-        </div>
+        <input type="hidden" name="next" value="{{ next }}" />
 
-        <button type="submit" class="submit-button">Sign up</button>
+        <button type="submit" class="submit-button">Log in</button>
       </form>
 
-      <div class="login-section">
-        <p class="login-text">Already have an account?</p>
-        <a href="{% url 'login' %}" class="login-link">Log in</a>
+      <div class="signup-section">
+        <p class="signup-text">Don't have an account?</p>
+        <a href="{% url 'signup' %}" class="signup-link">Sign up</a>
       </div>
     </div>
   </div>
 
   <script>
-    // Password visibility toggles for both password fields
+    // Password visibility toggle
     (function() {
-      // Toggle for password1
-      const toggleButton1 = document.getElementById('togglePassword1');
-      const passwordInput1 = document.getElementById('id_password1');
-      let isVisible1 = false;
+      const toggleButton = document.getElementById('togglePassword');
+      const passwordInput = document.getElementById('id_password');
+      let isVisible = false;
 
-      toggleButton1.addEventListener('click', function() {
-        isVisible1 = !isVisible1;
+      toggleButton.addEventListener('click', function() {
+        isVisible = !isVisible;
         
-        if (isVisible1) {
-          passwordInput1.type = 'text';
-          toggleButton1.textContent = '👁️‍🗨️';
-          toggleButton1.setAttribute('aria-label', 'Hide password');
+        if (isVisible) {
+          passwordInput.type = 'text';
+          toggleButton.textContent = '👁️‍🗨️';
+          toggleButton.setAttribute('aria-label', 'Hide password');
         } else {
-          passwordInput1.type = 'password';
-          toggleButton1.textContent = '👁️';
-          toggleButton1.setAttribute('aria-label', 'Show password');
-        }
-      });
-
-      // Toggle for password2
-      const toggleButton2 = document.getElementById('togglePassword2');
-      const passwordInput2 = document.getElementById('id_password2');
-      let isVisible2 = false;
-
-      toggleButton2.addEventListener('click', function() {
-        isVisible2 = !isVisible2;
-        
-        if (isVisible2) {
-          passwordInput2.type = 'text';
-          toggleButton2.textContent = '👁️‍🗨️';
-          toggleButton2.setAttribute('aria-label', 'Hide password');
-        } else {
-          passwordInput2.type = 'password';
-          toggleButton2.textContent = '👁️';
-          toggleButton2.setAttribute('aria-label', 'Show password');
+          passwordInput.type = 'password';
+          toggleButton.textContent = '👁️';
+          toggleButton.setAttribute('aria-label', 'Show password');
         }
       });
     })();
