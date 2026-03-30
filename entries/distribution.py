@@ -45,6 +45,7 @@ def _entry_to_inbox_json(entry: Entry) -> dict:
         "title": entry.title,
         "id": entry_id,
         "web": web,
+        "description": getattr(entry, "description", "") or "",
         "contentType": entry.content_type,
         "content": entry.content,
         "author": author_to_json(author),

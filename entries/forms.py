@@ -15,6 +15,7 @@ class EntryForm(forms.ModelForm):
         model = Entry
         fields = [
             "title",
+            "description",
             "content_type",
             "content",
             "visibility",

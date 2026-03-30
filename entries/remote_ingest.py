@@ -69,6 +69,7 @@ def handle_remote_entry_payload(payload: dict):
         raise ValueError("Entry payload is missing 'id' (FQID).")
 
     title = payload.get("title", "")
+    description = payload.get("description", "")
     content = payload.get("content", "")
     content_type = payload.get("contentType", Entry.CONTENT_TEXT_PLAIN)
     visibility = payload.get("visibility", Entry.VISIBILITY_PUBLIC)
@@ -84,6 +85,7 @@ def handle_remote_entry_payload(payload: dict):
         defaults={
             "author": remote_author,
             "title": title,
+            "description": description,
             "content": content,
             "content_type": content_type,
             "visibility": visibility,
@@ -101,6 +103,9 @@ def handle_remote_entry_payload(payload: dict):
             changed = True
         if entry.title != title:
             entry.title = title
+            changed = True
+        if entry.description != description:
+            entry.description = description
             changed = True
         if entry.content != content:
             entry.content = content

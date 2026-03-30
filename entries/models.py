@@ -95,6 +95,7 @@ class Entry(models.Model):
     )
 
     title = models.CharField(max_length=255, blank=True)
+    description = models.TextField(blank=True, default="", help_text="A brief description of the entry.")
 
     content_type = models.CharField(
         max_length=64,
