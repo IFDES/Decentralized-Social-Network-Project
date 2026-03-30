@@ -384,11 +384,10 @@ def get_profile_entry_visibilities(viewer, author) -> list:
             return [Entry.VISIBILITY_PUBLIC, Entry.VISIBILITY_UNLISTED]
         return [Entry.VISIBILITY_PUBLIC]
 
-    # remote author: public and unlisted are both follower-gated
+    # Remote author: PUBLIC is visible by default; UNLISTED requires approved follow.
     if approved_follow:
         return [Entry.VISIBILITY_PUBLIC, Entry.VISIBILITY_UNLISTED]
-
-    return []
+    return [Entry.VISIBILITY_PUBLIC]
 
 
 def _stream_entries_queryset(request: HttpRequest | None = None):
