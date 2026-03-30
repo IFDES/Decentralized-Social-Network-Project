@@ -242,8 +242,6 @@ def _decode_and_store_image(entry: Entry, remote_author: Author, content: str, c
         entry=entry,
     )
 
-
-def _handle_entry_payload(local_author: Author, payload: dict):
     """
     Ingest a remote entry into the local database.
     The entry is associated with the remote author from the payload
