@@ -1,5 +1,6 @@
 import json
 import mimetypes
+import re
 from datetime import datetime, timezone
 from uuid import UUID
 
@@ -132,10 +133,34 @@ def _build_image_urls_from_request(
     text = (request.POST.get("image_urls_text") or "").strip()
     for part in text.replace(",", "\n").splitlines():
         part = part.strip()
-        if part and (part.startswith("http://") or part.startswith("https://")):
-            # For external URLs, we don't create HostedImage; clients can embed
-            # them directly in markdown content.
+        if not part:
             continue
+        m = re.search(r"/api/media/images/([0-9a-fA-F-]{36})/?$", part)
+        if m:
+            try:
+                hosted = HostedImage.objects.get(pk=m.group(1))
+                if hosted.entry_id != (entry.pk if entry else None):
+                    hosted.entry = entry
+                    hosted.save(update_fields=["entry"])
+            except HostedImage.DoesNotExist:
+                pass
+
+
+def _reconcile_hosted_images(request: HttpRequest, entry: Entry) -> None:
+    """Unlink HostedImage objects whose URLs were removed from the textarea."""
+    submitted_urls: set[str] = set()
+    text = (request.POST.get("image_urls_text") or "").strip()
+    for line in text.replace(",", "\n").splitlines():
+        line = line.strip()
+        if line:
+            submitted_urls.add(line)
+
+    for hosted in entry.hosted_images.all():
+        url = _hosted_image_canonical_url(request, hosted)
+        if url not in submitted_urls:
+            hosted.entry = None
+            hosted.save(update_fields=["entry"])
+
 
 def _should_ingest_remote_entry_for_viewer(entry_payload: dict, remote_author: Author, viewer: Author | None) -> bool:
     visibility = (entry_payload.get("visibility") or Entry.VISIBILITY_PUBLIC).upper()
@@ -804,8 +829,9 @@ def entry_edit_page(
         form = EntryForm(request.POST, request.FILES, instance=entry)
         if form.is_valid():
             entry = form.save(commit=False)
-            entry.save() # Redundant?
+            entry.save()
 
+            _reconcile_hosted_images(request, entry)
             _build_image_urls_from_request(
                 request,
                 author,
