@@ -5,52 +5,550 @@
 {% endblock %}
 
 {% block content %}
-  <h1>
-    {% if is_create %}Create entry{% else %}Edit entry{% endif %}
-    for {{ author.display_name }}
-  </h1>
+<style>
+  .entry-form-page {
+    max-width: 800px;
+    margin: 0 auto;
+    padding: 0 20px 40px;
+  }
 
-  <p>Content (text) appears above any images. You can add multiple images by uploading files and/or pasting URLs.</p>
-  <p id="commonmark-image-hint" style="display: none;">To embed images in CommonMark, use <code>![alt text](image-url)</code>. <a href="{% url 'entries:image-upload' author.uuid %}" target="_blank" rel="noopener">Upload an image on this node</a> to get a URL, then paste it into your content.</p>
-  <form method="post" enctype="multipart/form-data">
-    {% csrf_token %}
-    {{ form.as_p }}
-    <p class="images-section">
-      <label><strong>Images (optional)</strong></label><br>
-      Upload from computer: <input type="file" name="image_files" id="id_image_files" accept="image/png,image/jpeg,image/gif,image/webp" multiple />
-      <br>
-      or image URL(s) <span style="color:#666;">(one per line or comma-separated)</span>:<br>
-      <textarea name="image_urls_text" id="id_image_urls_text" rows="3" placeholder="https://example.com/photo1.png&#10;https://example.com/photo2.jpg">{% if existing_image_urls_text %}{{ existing_image_urls_text }}{% endif %}</textarea>
+  .entry-form-header {
+    margin-bottom: 32px;
+    text-align: center;
+  }
+
+  .entry-form-title {
+    font-size: 2rem;
+    font-weight: 700;
+    color: #111827;
+    margin-bottom: 8px;
+  }
+
+  .entry-form-subtitle {
+    font-size: 1rem;
+    color: #6b7280;
+    line-height: 1.5;
+  }
+
+  .entry-form-container {
+    background: #ffffff;
+    border-radius: 12px;
+    padding: 40px;
+    border: 1px solid #e5e7eb;
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+  }
+
+  .form-section {
+    margin-bottom: 40px;
+  }
+
+  .form-section:last-of-type {
+    margin-bottom: 0;
+  }
+
+  .form-section-title {
+    font-size: 1.25rem;
+    font-weight: 700;
+    color: #111827;
+    margin-bottom: 20px;
+    padding-bottom: 12px;
+    border-bottom: 2px solid #e5e7eb;
+  }
+
+  .form-group {
+    margin-bottom: 24px;
+  }
+
+  .form-group:last-child {
+    margin-bottom: 0;
+  }
+
+  .form-label {
+    display: block;
+    margin-bottom: 8px;
+    font-weight: 600;
+    color: #374151;
+    font-size: 0.95rem;
+  }
+
+  .form-label-required::after {
+    content: " *";
+    color: #dc2626;
+  }
+
+  .form-input,
+  .form-textarea,
+  .form-select {
+    width: 100%;
+    padding: 12px 14px;
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+    font-size: 1rem;
+    color: #111827;
+    background: #ffffff;
+    font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    transition: border-color 0.15s, box-shadow 0.15s;
+  }
+
+  .form-input:focus,
+  .form-textarea:focus,
+  .form-select:focus {
+    outline: none;
+    border-color: #4361ee;
+    box-shadow: 0 0 0 3px rgba(67, 97, 238, 0.1);
+  }
+
+  .form-input:disabled,
+  .form-textarea:disabled {
+    background: #f9fafb;
+    color: #9ca3af;
+    cursor: not-allowed;
+  }
+
+  .form-textarea {
+    resize: vertical;
+    line-height: 1.5;
+  }
+
+  .form-textarea.small {
+    min-height: 80px;
+  }
+
+  .form-textarea.large {
+    min-height: 200px;
+  }
+
+  .form-hint {
+    display: block;
+    margin-top: 6px;
+    font-size: 0.875rem;
+    color: #6b7280;
+    line-height: 1.4;
+  }
+
+  .form-hint code {
+    background: #f3f4f6;
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-family: 'Monaco', 'Courier New', monospace;
+    font-size: 0.85em;
+  }
+
+  .form-hint a {
+    color: #4361ee;
+    text-decoration: none;
+  }
+
+  .form-hint a:hover {
+    text-decoration: underline;
+  }
+
+  .content-type-hint {
+    margin-top: 12px;
+    padding: 12px 16px;
+    border-radius: 8px;
+    font-size: 0.9rem;
+    line-height: 1.5;
+    display: none;
+  }
+
+  .content-type-hint.active {
+    display: block;
+  }
+
+  .content-type-hint.markdown {
+    background: #eff6ff;
+    border: 1px solid #bfdbfe;
+    color: #1e40af;
+  }
+
+  .content-type-hint.image {
+    background: #fef3c7;
+    border: 1px solid #fde68a;
+    color: #92400e;
+  }
+
+  .content-type-hint.plain {
+    background: #f0fdf4;
+    border: 1px solid #bbf7d0;
+    color: #166534;
+  }
+
+  .visibility-option {
+    margin-bottom: 8px;
+  }
+
+  .visibility-hint {
+    display: block;
+    margin-top: 8px;
+    padding: 10px 12px;
+    background: #f9fafb;
+    border-left: 3px solid #4361ee;
+    border-radius: 4px;
+    font-size: 0.875rem;
+    color: #6b7280;
+    line-height: 1.4;
+  }
+
+  .file-input-wrapper {
+    margin-bottom: 16px;
+  }
+
+  .file-input-label {
+    display: inline-block;
+    padding: 10px 20px;
+    background: #f3f4f6;
+    color: #374151;
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+    cursor: pointer;
+    font-weight: 500;
+    font-size: 0.95rem;
+    transition: background 0.15s;
+  }
+
+  .file-input-label:hover {
+    background: #e5e7eb;
+  }
+
+  .file-input-label input[type="file"] {
+    display: none;
+  }
+
+  .form-error {
+    background: #fef2f2;
+    border: 1px solid #fecaca;
+    border-radius: 8px;
+    padding: 12px 16px;
+    margin-bottom: 20px;
+    color: #dc2626;
+    font-size: 0.9rem;
+  }
+
+  .form-error ul {
+    margin: 0;
+    padding-left: 20px;
+  }
+
+  .field-error {
+    display: block;
+    margin-top: 6px;
+    color: #dc2626;
+    font-size: 0.875rem;
+  }
+
+  .submit-button {
+    width: 100%;
+    padding: 14px 32px;
+    background: #4361ee;
+    color: #ffffff;
+    border: none;
+    border-radius: 8px;
+    font-size: 1rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.15s;
+    min-height: 50px;
+    margin-top: 32px;
+  }
+
+  .submit-button:hover {
+    background: #3a0ca3;
+  }
+
+  .submit-button:active {
+    background: #2d0a7f;
+  }
+
+  .char-counter {
+    float: right;
+    font-size: 0.875rem;
+    color: #9ca3af;
+  }
+
+  /* Responsive Design */
+  @media (max-width: 768px) {
+    .entry-form-page {
+      padding: 0 16px 32px;
+    }
+
+    .entry-form-container {
+      padding: 24px 20px;
+    }
+
+    .entry-form-title {
+      font-size: 1.5rem;
+    }
+
+    .form-section {
+      margin-bottom: 32px;
+    }
+
+    .form-section-title {
+      font-size: 1.1rem;
+    }
+  }
+</style>
+
+<div class="entry-form-page">
+  <div class="entry-form-header">
+    <h1 class="entry-form-title">
+      {% if is_create %}Create New Post{% else %}Edit Post{% endif %}
+    </h1>
+    <p class="entry-form-subtitle">
+      Share your thoughts, stories, or images with your network
     </p>
-    <button type="submit">
-      {% if is_create %}Create entry{% else %}Save changes{% endif %}
-    </button>
-  </form>
+  </div>
 
-  <script>
-    (function() {
-      var ct = document.querySelector('[name="content_type"]');
-      var hint = document.getElementById('commonmark-image-hint');
-      if (!ct || !hint) return;
-      function toggle() { hint.style.display = (ct.value === 'text/markdown') ? 'block' : 'none'; }
-      ct.addEventListener('change', toggle);
-      toggle();
+  <div class="entry-form-container">
+    {% if form.non_field_errors %}
+    <div class="form-error">
+      {{ form.non_field_errors }}
+    </div>
+    {% endif %}
 
-      // Federation/API rule: for image entries the user doesn't need
-      // description/content fields; images are provided via the images section.
-      var descEl = document.querySelector('[name="description"]');
-      var contentEl = document.querySelector('[name="content"]');
-      function isImageType(value) {
-        if (!value) return false;
-        return value === 'Image' || value === 'image';
+    <form method="post" enctype="multipart/form-data" id="entry-form">
+      {% csrf_token %}
+
+      <!-- Section 1: Basic Information -->
+      <div class="form-section">
+        <h2 class="form-section-title">Basic Information</h2>
+
+        <div class="form-group">
+          <label for="id_title" class="form-label form-label-required">Title</label>
+          <input
+            type="text"
+            name="title"
+            id="id_title"
+            class="form-input"
+            maxlength="255"
+            value="{{ form.title.value|default:'' }}"
+            required
+          />
+          <span class="form-hint">
+            <span class="char-counter" id="title-counter">0/255</span>
+            Give your post a clear, descriptive title
+          </span>
+          {% if form.title.errors %}
+            <span class="field-error">{{ form.title.errors.0 }}</span>
+          {% endif %}
+        </div>
+
+        <div class="form-group">
+          <label for="id_description" class="form-label">Description</label>
+          <textarea
+            name="description"
+            id="id_description"
+            class="form-textarea small"
+            rows="3"
+          >{{ form.description.value|default:'' }}</textarea>
+          <span class="form-hint">Optional brief summary of your post</span>
+          {% if form.description.errors %}
+            <span class="field-error">{{ form.description.errors.0 }}</span>
+          {% endif %}
+        </div>
+      </div>
+
+      <!-- Section 2: Content -->
+      <div class="form-section">
+        <h2 class="form-section-title">Content</h2>
+
+        <div class="form-group">
+          <label for="id_content_type" class="form-label form-label-required">Content Type</label>
+          <select
+            name="content_type"
+            id="id_content_type"
+            class="form-select"
+            required
+          >
+            <option value="">Select content type...</option>
+            {% for value, label in form.content_type.field.choices %}
+              {% if value %}
+                <option value="{{ value }}" {% if form.content_type.value == value %}selected{% endif %}>
+                  {{ label }}
+                </option>
+              {% endif %}
+            {% endfor %}
+          </select>
+          {% if form.content_type.errors %}
+            <span class="field-error">{{ form.content_type.errors.0 }}</span>
+          {% endif %}
+
+          <!-- Content type hints -->
+          <div class="content-type-hint plain" id="hint-plain">
+            <strong>Plain Text:</strong> Your content will be displayed as-is without any formatting.
+          </div>
+          <div class="content-type-hint markdown" id="hint-markdown">
+            <strong>Markdown:</strong> Use CommonMark syntax for formatting. To embed images, use <code>![alt text](image-url)</code>. <a href="{% url 'entries:image-upload' author.uuid %}" target="_blank" rel="noopener">Upload an image</a> to get a URL.
+          </div>
+          <div class="content-type-hint image" id="hint-image">
+            <strong>Image Post:</strong> The description and content fields will be disabled. Add your images in the Media section below.
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label for="id_content" class="form-label">Content</label>
+          <textarea
+            name="content"
+            id="id_content"
+            class="form-textarea large"
+            rows="8"
+          >{{ form.content.value|default:'' }}</textarea>
+          <span class="form-hint">The main content of your post (text appears above any images)</span>
+          {% if form.content.errors %}
+            <span class="field-error">{{ form.content.errors.0 }}</span>
+          {% endif %}
+        </div>
+      </div>
+
+      <!-- Section 3: Media -->
+      <div class="form-section">
+        <h2 class="form-section-title">Media (Optional)</h2>
+
+        <div class="form-group">
+          <label class="form-label">Upload Images</label>
+          <div class="file-input-wrapper">
+            <label class="file-input-label">
+              <input
+                type="file"
+                name="image_files"
+                id="id_image_files"
+                accept="image/png,image/jpeg,image/gif,image/webp"
+                multiple
+              />
+              Choose files from your computer
+            </label>
+          </div>
+          <span class="form-hint">Select one or multiple image files (PNG, JPEG, GIF, WebP)</span>
+        </div>
+
+        <div class="form-group">
+          <label for="id_image_urls_text" class="form-label">Or Paste Image URLs</label>
+          <textarea
+            name="image_urls_text"
+            id="id_image_urls_text"
+            class="form-textarea small"
+            rows="3"
+            placeholder="https://example.com/photo1.png&#10;https://example.com/photo2.jpg"
+          >{% if existing_image_urls_text %}{{ existing_image_urls_text }}{% endif %}</textarea>
+          <span class="form-hint">One URL per line or comma-separated</span>
+        </div>
+      </div>
+
+      <!-- Section 4: Visibility -->
+      <div class="form-section">
+        <h2 class="form-section-title">Visibility</h2>
+
+        <div class="form-group">
+          <label for="id_visibility" class="form-label form-label-required">Who can see this post?</label>
+          <select
+            name="visibility"
+            id="id_visibility"
+            class="form-select"
+            required
+          >
+            {% for value, label in form.visibility.field.choices %}
+              {% if value %}
+                <option value="{{ value }}" {% if form.visibility.value == value %}selected{% endif %}>
+                  {{ label }}
+                </option>
+              {% endif %}
+            {% endfor %}
+          </select>
+          {% if form.visibility.errors %}
+            <span class="field-error">{{ form.visibility.errors.0 }}</span>
+          {% endif %}
+
+
+        </div>
+      </div>
+
+      <button type="submit" class="submit-button">
+        {% if is_create %}Create Post{% else %}Save Changes{% endif %}
+      </button>
+    </form>
+  </div>
+</div>
+
+<script>
+  (function() {
+    // Content type handling
+    var ct = document.getElementById('id_content_type');
+    var descEl = document.getElementById('id_description');
+    var contentEl = document.getElementById('id_content');
+    var hintPlain = document.getElementById('hint-plain');
+    var hintMarkdown = document.getElementById('hint-markdown');
+    var hintImage = document.getElementById('hint-image');
+
+    function isImageType(value) {
+      if (!value) return false;
+      return value === 'Image' || value === 'image';
+    }
+
+    function updateContentTypeHints() {
+      var value = ct.value;
+      
+      // Hide all hints
+      hintPlain.classList.remove('active');
+      hintMarkdown.classList.remove('active');
+      hintImage.classList.remove('active');
+
+      // Show relevant hint
+      if (value === 'text/plain') {
+        hintPlain.classList.add('active');
+      } else if (value === 'text/markdown') {
+        hintMarkdown.classList.add('active');
+      } else if (isImageType(value)) {
+        hintImage.classList.add('active');
       }
-      function toggleTextFields() {
-        var shouldDisable = isImageType(ct.value);
-        if (descEl) descEl.disabled = shouldDisable;
-        if (contentEl) contentEl.disabled = shouldDisable;
+
+      // Disable/enable text fields for image posts
+      var shouldDisable = isImageType(value);
+      if (descEl) descEl.disabled = shouldDisable;
+      if (contentEl) contentEl.disabled = shouldDisable;
+    }
+
+    if (ct) {
+      ct.addEventListener('change', updateContentTypeHints);
+      updateContentTypeHints();
+    }
+
+
+
+    // Title character counter
+    var titleInput = document.getElementById('id_title');
+    var titleCounter = document.getElementById('title-counter');
+
+    function updateCharCounter() {
+      var length = titleInput.value.length;
+      titleCounter.textContent = length + '/255';
+      if (length > 240) {
+        titleCounter.style.color = '#dc2626';
+      } else {
+        titleCounter.style.color = '#9ca3af';
       }
-      ct.addEventListener('change', toggleTextFields);
-      toggleTextFields();
-    })();
-  </script>
+    }
+
+    if (titleInput && titleCounter) {
+      titleInput.addEventListener('input', updateCharCounter);
+      updateCharCounter();
+    }
+
+    // File input display
+    var fileInput = document.getElementById('id_image_files');
+    if (fileInput) {
+      fileInput.addEventListener('change', function() {
+        var fileCount = this.files.length;
+        if (fileCount > 0) {
+          var label = this.parentElement;
+          var originalText = 'Choose files from your computer';
+          label.innerHTML = '<input type="file" name="image_files" id="id_image_files" accept="image/png,image/jpeg,image/gif,image/webp" multiple /> ' + fileCount + ' file' + (fileCount > 1 ? 's' : '') + ' selected';
+          // Reattach event listener
+          var newFileInput = label.querySelector('input[type="file"]');
+          newFileInput.addEventListener('change', arguments.callee);
+        }
+      });
+    }
+  })();
+</script>
 {% endblock %}
