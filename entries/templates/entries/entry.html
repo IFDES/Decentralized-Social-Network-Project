@@ -29,6 +29,12 @@
   <h1 class="entry-card__title">
     <a href="{% url 'entries:entry-detail' author.uuid entry.uuid %}">{{ entry.title|default:"Entry" }}</a>
   </h1>
+  <!-- Description -->
+  {% if entry.description %}
+    <div class="entry-card__description">
+      <pre>{{ entry.description }}</pre>
+    </div>
+  {% endif %}
 
   <!-- Content -->
   <div class="entry-card__content">
