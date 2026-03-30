@@ -183,7 +183,7 @@ def _should_ingest_remote_entry_for_viewer(entry_payload: dict, remote_author: A
     #     ).exists()
 
     if visibility == Entry.VISIBILITY_UNLISTED:
-    return False
+        return False
 
     if visibility == Entry.VISIBILITY_FRIENDS:
         return False
