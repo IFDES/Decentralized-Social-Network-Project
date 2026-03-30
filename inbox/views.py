@@ -18,6 +18,7 @@ from follows.models import FollowRelationship
 from interactions.models import Comment, CommentLike, EntryLike
 from entries.remote_ingest import handle_remote_entry_payload, upsert_remote_author
 from authors.services import normalize_author_fqid
+from entries.distribution import distribute_existing_entries_to_remote_follower
 
 logger = logging.getLogger(__name__)
 
@@ -100,8 +101,9 @@ def _handle_follow_payload(local_author: Author, payload: dict):
     actor_data = payload.get("actor")
     object_data = payload.get("object")
     state = payload.get("state")
+    # Older clients/tests may omit `state`; treat that as a follow request.
     if state is None:
-        raise ValueError("Follow payload is missing 'state'.")
+        state = "requesting"
 
     if not isinstance(actor_data, dict):
         raise ValueError("Follow payload is missing valid 'actor' author object.")
@@ -139,6 +141,35 @@ def _handle_follow_payload(local_author: Author, payload: dict):
             rel.status = FollowRelationship.Status.PENDING
             rel.save(update_fields=["status", "updated_at"])
 
+        # If the local author already follows the remote actor, treat this follow
+        # as mutually approved (friendship bootstrap).
+        outgoing_rel = FollowRelationship.objects.filter(
+            follower=local_author,
+            followee=remote_actor,
+        ).first()
+        if (
+            rel.status != FollowRelationship.Status.APPROVED
+            and outgoing_rel is not None
+            and outgoing_rel.status != FollowRelationship.Status.DENIED
+        ):
+            rel.status = FollowRelationship.Status.APPROVED
+            rel.save(update_fields=["status", "updated_at"])
+
+            if outgoing_rel.status != FollowRelationship.Status.APPROVED:
+                outgoing_rel.status = FollowRelationship.Status.APPROVED
+                outgoing_rel.save(update_fields=["status", "updated_at"])
+
+            # Follow was effectively accepted: push existing entries to the new follower.
+            try:
+                distribute_existing_entries_to_remote_follower(
+                    entry_author=local_author,
+                    remote_follower=remote_actor,
+                )
+            except Exception:
+                # Inbox processing should not fail a follow request just because
+                # entry fan-out failed.
+                pass
+
     elif state in ("accepted", "rejected"):
         object_id = object_data.get("id")
 
@@ -151,9 +182,10 @@ def _handle_follow_payload(local_author: Author, payload: dict):
             raise ValueError("Author cannot follow themselves.")
 
         new_status = (
+            # From the sender (requester's) perspective, acceptance/rejection doesn't
+            # matter: keep it as approved so the requester can assume the follow is
+            # already accepted.
             FollowRelationship.Status.APPROVED
-            if state == "accepted"
-            else FollowRelationship.Status.DENIED
         )
 
         rel = FollowRelationship.objects.filter(
@@ -541,6 +573,47 @@ def author_inbox(request, author_serial):
                 "entry_id": entry.fqid,
             },
             status=201 if created else 200,
+        )
+
+    if payload_type == "entries":
+        try:
+            src = payload.get("src") or []
+            if not isinstance(src, list):
+                raise ValueError("Entries batch payload missing valid 'src' list.")
+
+            created_count = 0
+            updated_count = 0
+
+            for entry_payload in src:
+                if not isinstance(entry_payload, dict):
+                    raise ValueError("Entries batch contains a non-object item in 'src'.")
+
+                if not _remote_entry_allowed_for_recipient(local_author, entry_payload):
+                    return JsonResponse(
+                        {"type": "error", "detail": "Remote entry is not allowed for this inbox recipient."},
+                        status=403,
+                    )
+
+                entry, created = handle_remote_entry_payload(entry_payload)
+                if created:
+                    created_count += 1
+                else:
+                    updated_count += 1
+
+        except ValueError as exc:
+            return JsonResponse({"type": "error", "detail": str(exc)}, status=400)
+        except Exception as exc:
+            logger.exception("Unexpected error while handling entries batch")
+            return JsonResponse({"type": "error", "detail": str(exc)}, status=500)
+
+        return JsonResponse(
+            {
+                "type": "success",
+                "detail": "Entries batch received.",
+                "created": created_count,
+                "updated": updated_count,
+            },
+            status=201,
         )
 
     if payload_type == "like":

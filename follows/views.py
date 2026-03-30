@@ -315,6 +315,20 @@ def approve_request_ui(request: HttpRequest, rel_id: int) -> HttpResponse:
     rel.status = FollowRelationship.Status.APPROVED
     rel.save(update_fields=["status", "updated_at"])
 
+    # Federation: if the follower is a remote author, distribute existing entries
+    # only after this node accepts the follow request.
+    if not rel.follower.is_local:
+        try:
+            from entries.distribution import distribute_existing_entries_to_remote_follower
+
+            distribute_existing_entries_to_remote_follower(
+                entry_author=me,
+                remote_follower=rel.follower,
+            )
+        except Exception:
+            # Don't break the approval action if fan-out fails.
+            pass
+
     return redirect("follows:follow-ui")
 
 
@@ -495,6 +509,19 @@ def followers_detail(request: HttpRequest, author_serial, foreign_author_fqid):
 
         rel.status = FollowRelationship.Status.APPROVED
         rel.save(update_fields=["status", "updated_at"])
+
+        # Federation: once accepted, push this author's existing entries to the
+        # newly-approved follower.
+        if not follower.is_local:
+            try:
+                from entries.distribution import distribute_existing_entries_to_remote_follower
+
+                distribute_existing_entries_to_remote_follower(
+                    entry_author=me,
+                    remote_follower=follower,
+                )
+            except Exception:
+                pass
 
         return JsonResponse(follow_to_json(rel), status=200)
 

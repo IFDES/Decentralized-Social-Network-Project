@@ -178,3 +178,85 @@ def distribute_entry_to_remote_followers(entry: Entry) -> None:
                 recipient.fqid,
                 exc,
             )
+
+
+def _entries_batch_to_inbox_json(entries: list[Entry]) -> dict:
+    """
+    Build a lightweight batch payload for pushing to a remote inbox.
+
+    This payload is intentionally shaped like the project-wide `type="entries"`
+    objects (stream/list responses), so other node backends can ingest the same
+    structure.
+    """
+    return {
+        "type": "entries",
+        "page_number": 1,
+        "size": len(entries),
+        "count": len(entries),
+        "src": [_entry_to_inbox_json(e) for e in entries],
+    }
+
+
+def distribute_existing_entries_to_remote_follower(
+    *,
+    entry_author: Author,
+    remote_follower: Author,
+) -> None:
+    """
+    When a remote follower's follow request is approved, push *all* existing
+    entries from `entry_author` to `remote_follower`'s inbox.
+
+    Recipient filtering rules:
+    - PUBLIC and UNLISTED entries are delivered to approved followers.
+    - FRIENDS entries are delivered only if mutual friends exist.
+    """
+    if not remote_follower or getattr(remote_follower, "is_local", True):
+        return
+    if getattr(entry_author, "is_deleted", False):
+        return
+
+    is_mutual_friend = FollowRelationship.are_friends(remote_follower, entry_author)
+
+    entries_qs = (
+        Entry.objects.filter(
+            author=entry_author,
+            is_deleted=False,
+        )
+        .exclude(visibility=Entry.VISIBILITY_DELETED)
+        .filter(visibility__in=[Entry.VISIBILITY_PUBLIC, Entry.VISIBILITY_UNLISTED])
+    )
+
+    if is_mutual_friend:
+        entries_qs = entries_qs | Entry.objects.filter(
+            author=entry_author,
+            is_deleted=False,
+            visibility=Entry.VISIBILITY_FRIENDS,
+        )
+
+    entries = list(entries_qs.order_by("-published"))
+    if not entries:
+        return
+
+    node = _remote_node_for_author(remote_follower)
+    if node is None:
+        return
+
+    recipient_uuid = _extract_author_uuid_from_fqid(remote_follower.fqid or "")
+    if not recipient_uuid:
+        recipient_uuid = str(remote_follower.uuid)
+
+    inbox_path = f"api/authors/{recipient_uuid}/inbox"
+    payload = _entries_batch_to_inbox_json(entries)
+
+    try:
+        make_node_request(node, "POST", inbox_path, json=payload)
+    except NodeDisabled:
+        # Silently skip disabled nodes to match the rest of federation fan-out.
+        return
+    except Exception as exc:
+        logger.error(
+            "Failed to distribute existing entries from %s to follower %s: %s",
+            entry_author.fqid or entry_author.uuid,
+            remote_follower.fqid or remote_follower.uuid,
+            exc,
+        )

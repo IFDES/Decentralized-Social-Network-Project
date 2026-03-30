@@ -192,6 +192,160 @@ class FollowEndpointsTests(TestCase):
         self.assertEqual(resp.status_code, 400, resp.content)
 
 
+class FollowFederationEntrySyncTests(TestCase):
+    def setUp(self):
+        from config.core.models import RemoteNode
+
+        self.client = Client()
+
+        # Local node: UserB (the followee)
+        self.author_b = Author.objects.create(
+            display_name="UserB",
+            fqid="http://127.0.0.1:8000/api/authors/b",
+            host="http://127.0.0.1:8000/api/",
+            web="http://127.0.0.1:8000/authors/b",
+            is_local=True,
+        )
+        self.user_b = User.objects.create_user(username="UserB_sync", password="passB12345")
+        AuthorAccount.objects.create(user=self.user_b, author=self.author_b)
+
+        self.b_uuid = str(self.author_b.uuid)
+
+        # Remote node follower: UserA
+        self.author_a = Author.objects.create(
+            display_name="Remote UserA",
+            fqid="https://remote.example/api/authors/" + "00000000-0000-0000-0000-00000000a1b1",
+            host="https://remote.example/api/",
+            web="https://remote.example/authors/00000000-0000-0000-0000-00000000a1b1",
+            is_local=False,
+        )
+        self.a_fqid = self.author_a.fqid
+        self.enc_a_fqid = enc(self.a_fqid)
+
+        # Remote node record for outgoing fan-out
+        self.remote_node = RemoteNode.objects.create(
+            display_name="Remote Test Node",
+            base_url="https://remote.example",
+            outgoing_username="us_to_them",
+            outgoing_password="secret",
+        )
+
+    def _make_entries(self):
+        from entries.models import Entry
+
+        Entry.objects.create(
+            author=self.author_b,
+            title="Public entry",
+            content="public",
+            visibility=Entry.VISIBILITY_PUBLIC,
+        )
+        Entry.objects.create(
+            author=self.author_b,
+            title="Unlisted entry",
+            content="unlisted",
+            visibility=Entry.VISIBILITY_UNLISTED,
+        )
+        Entry.objects.create(
+            author=self.author_b,
+            title="Friends entry",
+            content="friends",
+            visibility=Entry.VISIBILITY_FRIENDS,
+        )
+
+    def test_accept_follow_distributes_entries_batch_with_friends_when_mutual(self):
+        from unittest.mock import patch, MagicMock
+
+        from entries.models import Entry  # noqa: F401
+
+        # A (remote) requests follow -> B (local) has PENDING row
+        FollowRelationship.objects.create(
+            follower=self.author_a,
+            followee=self.author_b,
+            status=FollowRelationship.Status.PENDING,
+        )
+
+        # Mutual friend requires B -> A approved
+        FollowRelationship.objects.create(
+            follower=self.author_b,
+            followee=self.author_a,
+            status=FollowRelationship.Status.APPROVED,
+        )
+
+        self._make_entries()
+
+        self.client.login(username="UserB_sync", password="passB12345")
+
+        url = f"/api/authors/{self.b_uuid}/followers/{self.enc_a_fqid}/"
+        with patch("entries.distribution.make_node_request") as mock_req:
+            mock_req.return_value = MagicMock(status_code=201)
+
+            resp = self.client.put(url, content_type="application/json")
+            self.assertIn(resp.status_code, (200, 201), resp.content)
+
+        # One batched POST with all eligible entries
+        self.assertEqual(mock_req.call_count, 1)
+        args, kwargs = mock_req.call_args
+        self.assertEqual(args[1], "POST")
+        self.assertEqual(kwargs["json"]["type"], "entries")
+        sent_entries = kwargs["json"]["src"]
+        self.assertEqual(len(sent_entries), 3)
+        sent_visibilities = {e.get("visibility") for e in sent_entries}
+        self.assertEqual(
+            sent_visibilities,
+            {Entry.VISIBILITY_PUBLIC, Entry.VISIBILITY_UNLISTED, Entry.VISIBILITY_FRIENDS},
+        )
+
+    def test_accept_follow_distributes_entries_batch_without_friends_when_not_mutual(self):
+        from unittest.mock import patch, MagicMock
+
+        from entries.models import Entry  # noqa: F401
+
+        FollowRelationship.objects.create(
+            follower=self.author_a,
+            followee=self.author_b,
+            status=FollowRelationship.Status.PENDING,
+        )
+        # NOTE: no B -> A approved relationship here, so not mutual friends.
+
+        self._make_entries()
+        self.client.login(username="UserB_sync", password="passB12345")
+
+        url = f"/api/authors/{self.b_uuid}/followers/{self.enc_a_fqid}/"
+        with patch("entries.distribution.make_node_request") as mock_req:
+            mock_req.return_value = MagicMock(status_code=201)
+            resp = self.client.put(url, content_type="application/json")
+            self.assertIn(resp.status_code, (200, 201), resp.content)
+
+        self.assertEqual(mock_req.call_count, 1)
+        args, kwargs = mock_req.call_args
+        self.assertEqual(kwargs["json"]["type"], "entries")
+        sent_entries = kwargs["json"]["src"]
+        self.assertEqual(len(sent_entries), 2)
+        sent_visibilities = {e.get("visibility") for e in sent_entries}
+        self.assertEqual(sent_visibilities, {Entry.VISIBILITY_PUBLIC, Entry.VISIBILITY_UNLISTED})
+
+    def test_deny_follow_does_not_distribute_entries(self):
+        from unittest.mock import patch, MagicMock
+
+        from entries.models import Entry  # noqa: F401
+
+        FollowRelationship.objects.create(
+            follower=self.author_a,
+            followee=self.author_b,
+            status=FollowRelationship.Status.PENDING,
+        )
+        self._make_entries()
+
+        self.client.login(username="UserB_sync", password="passB12345")
+        url = f"/api/authors/{self.b_uuid}/followers/{self.enc_a_fqid}/"
+        with patch("entries.distribution.make_node_request") as mock_req:
+            mock_req.return_value = MagicMock(status_code=201)
+            resp = self.client.delete(url)
+            self.assertIn(resp.status_code, (200, 204), resp.content)
+
+        mock_req.assert_not_called()
+
+
 class FollowEdgeCaseTests(TestCase):
     """Edge-case tests for follow operations on non-existent users."""
 

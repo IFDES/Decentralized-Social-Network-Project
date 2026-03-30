@@ -399,6 +399,65 @@ class InboxRemoteMutualFollowFriendshipTests(_InboxTestMixin, TestCase):
         self.assertEqual(outgoing.status, FollowRelationship.Status.APPROVED)
 
 
+class InboxFollowStateUpdateTests(_InboxTestMixin, TestCase):
+    def setUp(self):
+        self._set_up_inbox()
+
+    def test_rejected_follow_update_does_not_downgrade_requester(self):
+        """
+        Federation rule:
+        If the follow request is rejected, the requester should still treat the
+        relationship as accepted (it will simply stop receiving entries because
+        the remote node won't distribute).
+        """
+        remote_actor_data = {
+            "type": "author",
+            "id": "https://remote.example/api/authors/remote-actor-rejected",
+            "host": "https://remote.example/api/",
+            "displayName": "Remote Rejected Actor",
+            "web": "https://remote.example/authors/remote-actor-rejected",
+            "github": "",
+            "profileImage": "",
+        }
+        remote_actor = Author.objects.create(
+            display_name="Remote Rejected Actor",
+            fqid=remote_actor_data["id"],
+            host=remote_actor_data["host"],
+            web=remote_actor_data["web"],
+            is_local=False,
+        )
+
+        FollowRelationship.objects.create(
+            follower=self.local_author,
+            followee=remote_actor,
+            status=FollowRelationship.Status.APPROVED,
+        )
+
+        payload = {
+            "type": "follow",
+            "state": "rejected",
+            "actor": remote_actor_data,
+            "object": {
+                "type": "author",
+                "id": self.local_author.fqid,
+                "host": "http://testserver/api/",
+                "displayName": self.local_author.display_name,
+                "web": self.local_author.web,
+                "github": "",
+                "profileImage": "",
+            },
+        }
+
+        resp = self._post_inbox(payload)
+        self.assertEqual(resp.status_code, 201)
+
+        rel = FollowRelationship.objects.get(
+            follower=self.local_author,
+            followee=remote_actor,
+        )
+        self.assertEqual(rel.status, FollowRelationship.Status.APPROVED)
+
+
 class InboxCommentFederationTests(_InboxTestMixin, TestCase):
     def setUp(self):
         self._set_up_inbox()
