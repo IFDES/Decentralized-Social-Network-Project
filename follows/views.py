@@ -211,7 +211,7 @@ def follow_to_json(rel: FollowRelationship) -> dict:
             }.get(getattr(rel, "status", None))
         )
         or "requesting",
-      "actor": author_to_json(rel.follower),
+        "actor": author_to_json(rel.follower),
         "object": author_to_json(rel.followee),
     }
 
