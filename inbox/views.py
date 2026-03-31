@@ -3,6 +3,8 @@ import json
 import logging
 import uuid as uuid_mod
 from urllib.parse import urlparse
+import re
+from uuid import UUID
 
 from django.db.models import Q
 from django.core.files.base import ContentFile
@@ -27,13 +29,34 @@ def _extract_author_uuid_from_fqid(fqid):
     """Extract the author UUID segment from an FQID like .../api/authors/{uuid}."""
     if not fqid:
         return None
-    for marker in ("/api/authors/", "/authors/"):
-        if marker in fqid:
-            rest = fqid.split(marker, 1)[1].strip("/")
-            uuid_part = rest.split("/", 1)[0]
-            return uuid_part if uuid_part else None
+    match = re.search(r'/authors/([^/]+)', str(fqid))
+    if match:
+        extracted = match.group(1).strip()
+        return extracted if extracted else None
     return None
 
+def _resolve_local_author_for_inbox(author_serial: str) -> Author:
+    """Robustly resolve the local author by UUID or FQID fallback to prevent 404s."""
+    serial_str = str(author_serial).strip("/")
+    
+    try:
+        # 1. Direct UUID match (safest and most common)
+        uid = UUID(serial_str)
+        return Author.objects.get(uuid=uid, is_deleted=False, is_local=True)
+    except (ValueError, TypeError, Author.DoesNotExist):
+        pass
+    
+    try:
+        # 2. String match in case UUID lookup failed but it's a string PK
+        return Author.objects.get(uuid=serial_str, is_deleted=False, is_local=True)
+    except (ValueError, TypeError, Author.DoesNotExist):
+        pass
+        
+    try:
+        # 3. Fallback: Catch cases where the URL router passed the full FQID or extra paths
+        return Author.objects.get(fqid__contains=serial_str, is_deleted=False, is_local=True)
+    except Author.DoesNotExist:
+        raise Author.DoesNotExist()
 
 def _find_existing_follow_for_remote(local_author, remote_author, direction="outgoing"):
     if not remote_author.fqid:
@@ -510,7 +533,7 @@ def author_inbox(request, author_serial):
         )
 
     try:
-        local_author = Author.objects.get(uuid=author_serial, is_deleted=False, is_local=True)
+        local_author = _resolve_local_author_for_inbox(author_serial)
     except Author.DoesNotExist:
         return JsonResponse(
             {"type": "error", "detail": "Target local author not found."},

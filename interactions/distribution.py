@@ -161,7 +161,13 @@ def _send_payload_to_recipients(payload: dict, recipients) -> None:
 
         author_uuid = _extract_author_uuid_from_fqid(recipient.fqid or "")
         if not author_uuid:
-            author_uuid = str(recipient.uuid)
+            logger.error(
+                "Cannot distribute %s to %s: Follower stub has invalid or missing FQID: '%s'.",
+                event_type,
+                recipient.display_name,
+                recipient.fqid
+            )
+            continue
         inbox_path = f"api/authors/{author_uuid}/inbox"
 
         # Deduplicate by node + inbox path if multiple recipient-author rows map similarly.
