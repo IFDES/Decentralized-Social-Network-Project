@@ -2,6 +2,7 @@ from datetime import datetime, timezone
 import base64
 import uuid as uuid_mod
 
+from django.conf import settings
 from django.core.files.base import ContentFile
 
 from authors.models import Author
@@ -16,9 +17,18 @@ def upsert_remote_author(author_data: dict) -> Author:
     """
     fqid = author_data.get("id")
     if fqid:
-        fqid = normalize_author_fqid(fqid)    
+        fqid = normalize_author_fqid(fqid)
     else:
         raise ValueError("Remote author object is missing 'id'.")
+
+    # Guard: if this FQID belongs to the local node, return the existing
+    # local author without modification. A remote node echoing back our
+    # own author data must never flip is_local to False.
+    local_base = settings.SERVICE_BASE_URL.rstrip("/")
+    if fqid.startswith(f"{local_base}/"):
+        local_author = Author.objects.filter(fqid=fqid, is_deleted=False).first()
+        if local_author is not None:
+            return local_author
 
     defaults = {
         "host": author_data.get("host", ""),

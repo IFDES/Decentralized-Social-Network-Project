@@ -156,6 +156,9 @@ def follow_ui_page(request: HttpRequest) -> HttpResponse:
         from config.core.request_utils import make_node_request
         from entries.remote_ingest import upsert_remote_author
 
+        from django.conf import settings as _settings
+        local_base = _settings.SERVICE_BASE_URL.rstrip("/")
+
         remote_nodes = RemoteNode.objects.filter(is_active=True).order_by("-added_at")
         existing_followee_ids = set(rel_by_followee_id.keys())
 
@@ -190,6 +193,11 @@ def follow_ui_page(request: HttpRequest) -> HttpResponse:
 
                 for author_data in authors_payload:
                     if not isinstance(author_data, dict):
+                        continue
+                    # Skip authors that belong to this node to prevent
+                    # upsert_remote_author from flipping their is_local flag.
+                    author_id = author_data.get("id", "")
+                    if isinstance(author_id, str) and author_id.startswith(f"{local_base}/"):
                         continue
                     try:
                         remote_author = upsert_remote_author(author_data)
