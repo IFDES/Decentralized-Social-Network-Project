@@ -147,7 +147,8 @@ def get_or_fetch_author_by_fqid(author_fqid: str) -> Author:
             return existing
 
     fqid_host = node_base_url_from_author_fqid(author_fqid)
-    local_host = settings.SERVICE_BASE_URL.rstrip("/")
+    parsed_local = urlparse(settings.SERVICE_BASE_URL.rstrip("/"))
+    local_host = f"{parsed_local.scheme}://{parsed_local.netloc}".rstrip("/")    
     if fqid_host == local_host:
         if existing is not None:
             return existing
