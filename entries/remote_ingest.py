@@ -90,7 +90,7 @@ def handle_remote_entry_payload(payload: dict):
     content = payload.get("content", "") or ""
     content_type = payload.get("contentType", Entry.CONTENT_TEXT_PLAIN)
     visibility = payload.get("visibility", Entry.VISIBILITY_PUBLIC)
-    published = payload.get("published")
+    published = payload.get("published") or datetime.now(timezone.utc)
     web = payload.get("web", "")
 
     is_deleted = visibility == Entry.VISIBILITY_DELETED
