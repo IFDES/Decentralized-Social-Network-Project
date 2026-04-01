@@ -394,7 +394,7 @@ def _stream_entries_queryset(request: HttpRequest | None = None):
         return base.filter(
             visibility=Entry.VISIBILITY_PUBLIC,
             author__is_local=True,
-        ).order_by("-updated_at", "-published", "-uuid")
+        ).order_by("-published", "-uuid")
 
     friend_ids = set(
         FollowRelationship.friends_of(viewer).values_list("uuid", flat=True)
@@ -440,7 +440,7 @@ def _stream_entries_queryset(request: HttpRequest | None = None):
             Q(visibility=Entry.VISIBILITY_FRIENDS) &
             Q(author_id__in=friend_ids)
         )
-    ).order_by("-updated_at", "-published", "-uuid")
+    ).order_by("-published", "-uuid")
 
 
 # ---------------------------------------------------------------------------

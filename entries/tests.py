@@ -772,7 +772,7 @@ class StreamPageTests(TestCase):
             .filter(is_deleted=False, deleted_at__isnull=True)
             .filter(visibility=Entry.VISIBILITY_PUBLIC)
             .exclude(visibility=Entry.VISIBILITY_DELETED)
-            .order_by("-updated_at", "-published", "-uuid")
+            .order_by("-published", "-uuid")
             .values_list("title", flat=True)
         )
 
