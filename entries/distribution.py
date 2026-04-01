@@ -21,9 +21,22 @@ from config.core.serializers import author_to_json
 from follows.models import FollowRelationship
 
 from .models import Entry
+from django.utils import timezone
+from django.utils.dateparse import parse_datetime
 
 logger = logging.getLogger(__name__)
 
+def _as_utc_iso(value):
+    if value is None:
+        value = timezone.now()
+    elif isinstance(value, str):
+        parsed = parse_datetime(value)
+        value = parsed if parsed is not None else timezone.now()
+
+    if timezone.is_naive(value):
+        value = timezone.make_aware(value, timezone.get_current_timezone())
+
+    return value.astimezone(tz.utc).isoformat()
 
 def _entry_to_inbox_json(entry: Entry) -> dict:
     """
@@ -79,7 +92,8 @@ def _entry_to_inbox_json(entry: Entry) -> dict:
         "contentType": content_type,
         "content": content,
         "author": author_to_json(author),
-        "published": entry.published.astimezone(tz.utc).isoformat(),
+        # "published": entry.published.astimezone(tz.utc).isoformat(),
+        "published": _as_utc_iso(entry.published),
         "visibility": entry.visibility,
     }
 

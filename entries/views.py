@@ -829,6 +829,7 @@ def entry_create_page(request: HttpRequest, author_id: UUID) -> HttpResponse:
                 entry.content = ""
                 entry.save(update_fields=["content_type", "description", "content"])
             entry.save(update_fields=["updated_at"])
+            entry.refresh_from_db()
 
             # Fan out to remote followers / friends
             distribute_entry_to_remote_followers(entry)
