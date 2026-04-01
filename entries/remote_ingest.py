@@ -11,19 +11,12 @@ from authors.services import normalize_author_fqid
 
 
 def upsert_remote_author(author_data: dict) -> Author:
-    """
-    Create or update a remote Author row from a remote author payload.
-    Returns the local DB Author instance representing that remote author.
-    """
     fqid = author_data.get("id")
     if fqid:
         fqid = normalize_author_fqid(fqid)
     else:
         raise ValueError("Remote author object is missing 'id'.")
 
-    # Guard: if this FQID belongs to the local node, return the existing
-    # local author without modification. A remote node echoing back our
-    # own author data must never flip is_local to False.
     local_base = settings.SERVICE_BASE_URL.rstrip("/")
     if fqid.startswith(f"{local_base}/"):
         local_author = Author.objects.filter(fqid=fqid, is_deleted=False).first()
@@ -37,25 +30,21 @@ def upsert_remote_author(author_data: dict) -> Author:
         "github": author_data.get("github", ""),
         "profile_image": author_data.get("profileImage", ""),
         "description": author_data.get("description", ""),
-        "is_local": False,
         "is_deleted": False,
     }
 
     author, created = Author.objects.get_or_create(
         fqid=fqid,
-        defaults=defaults,
+        defaults={**defaults, "is_local": False},
     )
 
     if not created:
         changed = False
+
         for field, value in defaults.items():
             if value != "" and getattr(author, field) != value:
                 setattr(author, field, value)
                 changed = True
-
-        # if author.is_local:
-        #     author.is_local = False
-        #     changed = True
 
         if author.is_deleted:
             author.is_deleted = False
