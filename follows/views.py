@@ -1,5 +1,5 @@
 import json
-from urllib.parse import unquote
+from urllib.parse import unquote, urlsplit
 
 from django.contrib.auth.decorators import login_required
 from django.http import (
@@ -208,6 +208,11 @@ def follow_ui_page(request: HttpRequest) -> HttpResponse:
                     if author_data["host"] not in remote_nodes_api:
                         continue
                     
+                    x = urlsplit(author_data["id"])
+                    if f"{x.scheme}://{x.netloc}/api" not in remote_nodes_api:
+                        continue
+                    # end of skip logic
+
                     try:
                         remote_author = upsert_remote_author(author_data)
                     except Exception:
