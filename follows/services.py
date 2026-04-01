@@ -117,6 +117,13 @@ def fetch_remote_author_json(author_fqid: str, timeout: int = 10) -> dict:
 
     if not isinstance(data, dict):
         raise ValueError("Remote author endpoint returned an unexpected payload.")
+    
+    # Rejects authors if it is not local to their node
+
+    for index in reversed(range(len(data["authors"]))):
+        if data["authors"][index]["host"] in [f"{remote_node}/api/", f"{remote_node}/api"]:
+            continue
+        data["authors"].pop(index)
 
     return data
 
