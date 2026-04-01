@@ -78,9 +78,10 @@ def _get_current_author(request: HttpRequest):
     return author
 
 def _delete_remote_authors(remote_nodes_api:list):
-    local_remote_authors = Author.objects.filter(is_deleted=False, is_local=False)
+    local_remote_authors = Author.objects.filter(is_local=False)
     for local_remote_author in local_remote_authors:
-        if local_remote_author.fqid not in remote_nodes_api:
+        x = urlsplit(local_remote_author.fqid)
+        if f"{x.scheme}://{x.netloc}/api" not in remote_nodes_api:
             local_remote_author.delete()
 
 @login_required
