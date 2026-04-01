@@ -11,7 +11,11 @@ from authors.models import Author
 from config.core.authentication import NodeDisabled
 from config.core.request_utils import make_node_request
 from config.core.serializers import author_to_json
-from entries.distribution import _remote_node_for_author, _extract_author_uuid_from_fqid
+from entries.distribution import (
+    _remote_node_for_author,
+    _extract_author_uuid_from_fqid,
+    _entry_to_inbox_json,
+)
 from follows.models import FollowRelationship
 
 from .models import Comment, CommentLike, EntryLike
@@ -100,12 +104,16 @@ def _comment_delete_to_inbox_json(comment: Comment) -> dict:
 
 def _candidate_remote_recipients_for_entry_comment(entry, comment_author: Author):
     """
-    Build a recipient set using existing follow/friend distribution ideas.
+    Build the set of remote authors who should receive push notifications
+    about interactions (comments, likes) on the given entry.
 
-    Reuses the same model-level relationship logic used elsewhere:
-    - always include remote comment/entry authors if remote
-    - for PUBLIC/UNLISTED: include remote APPROVED followers of entry author
-    - for FRIENDS: include remote friends of entry author
+    Recipients include:
+    - the entry author (if remote)
+    - the interacting author / comment_author param (if remote)
+    - remote authors who have previously commented on the entry
+    - remote authors who have previously liked the entry
+    - for PUBLIC/UNLISTED: remote APPROVED followers of entry author
+    - for FRIENDS: remote friends of entry author
     """
     entry_author = entry.author
 
@@ -115,6 +123,31 @@ def _candidate_remote_recipients_for_entry_comment(entry, comment_author: Author
         recipients.add(comment_author)
     if not entry_author.is_local and not entry_author.is_deleted:
         recipients.add(entry_author)
+
+    # Include remote authors who have previously interacted with this entry
+    # so they receive updates even without a follow relationship.
+    remote_commenter_ids = (
+        Comment.objects.filter(
+            entry=entry,
+            author__is_local=False,
+            author__is_deleted=False,
+        )
+        .values_list("author_id", flat=True)
+        .distinct()
+    )
+    remote_liker_ids = (
+        EntryLike.objects.filter(
+            entry=entry,
+            author__is_local=False,
+            author__is_deleted=False,
+        )
+        .values_list("author_id", flat=True)
+        .distinct()
+    )
+    participant_ids = set(remote_commenter_ids) | set(remote_liker_ids)
+    if participant_ids:
+        for author in Author.objects.filter(pk__in=participant_ids, is_deleted=False):
+            recipients.add(author)
 
     if entry.visibility in (entry.VISIBILITY_PUBLIC, entry.VISIBILITY_UNLISTED):
         follower_ids = (
@@ -195,9 +228,24 @@ def _send_payload_to_recipients(payload: dict, recipients) -> None:
             )
 
 
+def _ensure_entry_on_remote(entry, recipients) -> None:
+    """
+    If the entry author is local, push the entry to each remote recipient's
+    inbox before sending any interaction payload.  This guarantees the remote
+    node has the entry even if it was never pushed via follow or pulled by
+    the stream.  The remote inbox's entry handler upserts, so duplicates are
+    harmless.
+    """
+    if not entry.author.is_local:
+        return  # remote node already owns the entry
+    entry_payload = _entry_to_inbox_json(entry)
+    _send_payload_to_recipients(entry_payload, recipients)
+
+
 def distribute_comment_like_to_remote(cl: CommentLike) -> None:
     payload = _comment_like_to_inbox_json(cl)
     recipients = _candidate_remote_recipients_for_comment_like(cl)
+    _ensure_entry_on_remote(cl.comment.entry, recipients)
     _send_payload_to_recipients(payload, recipients)
 
 
@@ -210,6 +258,7 @@ def distribute_comment_like_delete_to_remote(cl: CommentLike) -> None:
 def distribute_comment_to_remote(comment: Comment) -> None:
     payload = _comment_to_inbox_json(comment)
     recipients = _candidate_remote_recipients_for_entry_comment(comment.entry, comment.author)
+    _ensure_entry_on_remote(comment.entry, recipients)
     _send_payload_to_recipients(payload, recipients)
 
 
@@ -222,6 +271,7 @@ def distribute_comment_delete_to_remote(comment: Comment) -> None:
 def distribute_entry_like_to_remote(el: EntryLike) -> None:
     payload = _entry_like_to_inbox_json(el)
     recipients = _candidate_remote_recipients_for_entry_like(el)
+    _ensure_entry_on_remote(el.entry, recipients)
     _send_payload_to_recipients(payload, recipients)
 
 
