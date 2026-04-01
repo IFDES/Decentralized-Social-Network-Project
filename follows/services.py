@@ -120,12 +120,15 @@ def fetch_remote_author_json(author_fqid: str, timeout: int = 10) -> dict:
     
     # Rejects authors if it is not local to their node
 
-    for index in reversed(range(len(data["authors"]))):
-        if data["authors"][index]["host"] in [f"{remote_node}/api/", f"{remote_node}/api"]:
-            continue
-        data["authors"].pop(index)
-
-    return data
+    if data["type"] == "authors":
+        for index in reversed(range(len(data["authors"]))):
+            if data["authors"][index]["host"] in [f"{remote_node}/api/", f"{remote_node}/api", remote_node]:
+                continue
+            data["authors"].pop(index)
+        return data
+    else:
+        if data["host"] not in [f"{remote_node}/api/", f"{remote_node}/api", remote_node]:
+            raise ValueError("Remote author is not local to the expected node.")
 
 
 def get_or_fetch_author_by_fqid(author_fqid: str) -> Author:
