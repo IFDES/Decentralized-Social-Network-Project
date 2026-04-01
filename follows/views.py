@@ -371,6 +371,17 @@ def follow_remote_author_ui(request: HttpRequest) -> HttpResponse:
             rel.delete()
             return HttpResponseBadRequest(str(exc))
 
+    if rel.status == FollowRelationship.Status.APPROVED and not getattr(followee, "is_local", True):
+        try:
+            from entries.distribution import distribute_existing_entries_to_remote_follower
+
+            distribute_existing_entries_to_remote_follower(
+                entry_author=me,
+                remote_follower=followee,
+            )
+        except Exception:
+            pass
+
     return redirect("follows:follow-ui")
 
 
@@ -532,6 +543,20 @@ def following_detail(request: HttpRequest, author_serial, foreign_author_fqid):
             except ConnectionError as exc:
                 rel.delete()
                 return JsonResponse({"detail": str(exc)}, status=502)
+
+        if (
+            not getattr(followee, "is_local", True)
+            and rel.status == FollowRelationship.Status.APPROVED
+        ):
+            try:
+                from entries.distribution import distribute_existing_entries_to_remote_follower
+
+                distribute_existing_entries_to_remote_follower(
+                    entry_author=me,
+                    remote_follower=followee,
+                )
+            except Exception:
+                pass
 
         return JsonResponse(follow_to_json(rel), status=201 if should_send else 200)
 
