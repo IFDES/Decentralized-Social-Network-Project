@@ -609,3 +609,538 @@ class InboxLikeDeleteTests(_InboxTestMixin, TestCase):
         resp = self._post_inbox(payload)
         self.assertEqual(resp.status_code, 200)
         self.assertFalse(EntryLike.objects.filter(author=self.remote_author, entry=self.entry).exists())
+
+    def test_like_delete_removes_comment_like(self):
+        comment = Comment.objects.create(
+            author=self.local_author, entry=self.entry, comment="A comment"
+        )
+        CommentLike.objects.create(author=self.remote_author, comment=comment)
+        payload = {
+            "type": "like_delete",
+            "author": self.remote_author_data,
+            "object": comment.fqid,
+        }
+        resp = self._post_inbox(payload)
+        self.assertEqual(resp.status_code, 200)
+        self.assertFalse(CommentLike.objects.filter(author=self.remote_author, comment=comment).exists())
+
+    def test_like_delete_nonexistent_target_returns_400(self):
+        payload = {
+            "type": "like_delete",
+            "author": self.remote_author_data,
+            "object": "http://testserver/api/authors/00000000-0000-0000-0000-000000000000/entries/00000000-0000-0000-0000-000000000000",
+        }
+        resp = self._post_inbox(payload)
+        self.assertEqual(resp.status_code, 400)
+
+    def test_like_delete_noop_when_like_absent(self):
+        payload = {
+            "type": "like_delete",
+            "author": self.remote_author_data,
+            "object": self.entry.fqid,
+        }
+        resp = self._post_inbox(payload)
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertFalse(data["deleted"])
+
+    def test_like_delete_missing_author_returns_400(self):
+        payload = {
+            "type": "like_delete",
+            "object": self.entry.fqid,
+        }
+        resp = self._post_inbox(payload)
+        self.assertEqual(resp.status_code, 400)
+
+    def test_like_delete_missing_object_returns_400(self):
+        payload = {
+            "type": "like_delete",
+            "author": self.remote_author_data,
+        }
+        resp = self._post_inbox(payload)
+        self.assertEqual(resp.status_code, 400)
+
+
+class InboxAuthEdgeCaseTests(_InboxTestMixin, TestCase):
+    """Edge cases for authentication and request validation."""
+
+    def setUp(self):
+        self._set_up_inbox()
+
+    def test_invalid_json_body_returns_400(self):
+        self.client.force_login(self.node_user)
+        resp = self.client.post(
+            reverse("author-inbox", args=[self.local_author.uuid]),
+            data="this is not json{{{",
+            content_type="application/json",
+        )
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("Invalid JSON", resp.json()["detail"])
+
+    def test_nonexistent_author_returns_404(self):
+        import uuid as _uuid
+
+        bogus_uuid = _uuid.uuid4()
+        self.client.force_login(self.node_user)
+        resp = self.client.post(
+            reverse("author-inbox", args=[bogus_uuid]),
+            data=json.dumps({"type": "follow"}),
+            content_type="application/json",
+        )
+        self.assertEqual(resp.status_code, 404)
+
+    def test_get_method_returns_405(self):
+        self.client.force_login(self.node_user)
+        resp = self.client.get(
+            reverse("author-inbox", args=[self.local_author.uuid]),
+        )
+        self.assertEqual(resp.status_code, 405)
+
+    def test_put_method_returns_405(self):
+        self.client.force_login(self.node_user)
+        resp = self.client.put(
+            reverse("author-inbox", args=[self.local_author.uuid]),
+            data=json.dumps({"type": "follow"}),
+            content_type="application/json",
+        )
+        self.assertEqual(resp.status_code, 405)
+
+    def test_empty_type_returns_400(self):
+        resp = self._post_inbox({"type": ""})
+        self.assertEqual(resp.status_code, 400)
+
+    def test_missing_type_field_returns_400(self):
+        resp = self._post_inbox({"data": "no type here"})
+        self.assertEqual(resp.status_code, 400)
+
+
+class InboxFollowEdgeCaseTests(_InboxTestMixin, TestCase):
+    """Edge cases for the follow payload handler."""
+
+    def setUp(self):
+        self._set_up_inbox()
+        self.remote_actor_data = {
+            "type": "author",
+            "id": "https://remote.example/api/authors/remote-follow-edge",
+            "host": "https://remote.example/api/",
+            "displayName": "Remote Follow Edge",
+            "web": "https://remote.example/authors/remote-follow-edge",
+            "github": "",
+            "profileImage": "",
+        }
+        self.local_author_object_data = {
+            "type": "author",
+            "id": self.local_author.fqid,
+            "host": "http://testserver/api/",
+            "displayName": self.local_author.display_name,
+            "web": self.local_author.web or "",
+            "github": "",
+            "profileImage": "",
+        }
+
+    def test_basic_follow_request_creates_pending_relationship(self):
+        payload = {
+            "type": "follow",
+            "actor": self.remote_actor_data,
+            "object": self.local_author_object_data,
+        }
+        resp = self._post_inbox(payload)
+        self.assertEqual(resp.status_code, 201)
+
+        remote = Author.objects.get(fqid=self.remote_actor_data["id"])
+        rel = FollowRelationship.objects.get(follower=remote, followee=self.local_author)
+        self.assertEqual(rel.status, FollowRelationship.Status.PENDING)
+
+    def test_follow_missing_actor_returns_400(self):
+        payload = {
+            "type": "follow",
+            "actor": "not-a-dict",
+            "object": self.local_author_object_data,
+        }
+        resp = self._post_inbox(payload)
+        self.assertEqual(resp.status_code, 400)
+
+    def test_follow_missing_object_returns_400(self):
+        payload = {
+            "type": "follow",
+            "actor": self.remote_actor_data,
+            "object": "not-a-dict",
+        }
+        resp = self._post_inbox(payload)
+        self.assertEqual(resp.status_code, 400)
+
+    def test_follow_self_returns_400(self):
+        payload = {
+            "type": "follow",
+            "actor": self.local_author_object_data,
+            "object": self.local_author_object_data,
+        }
+        resp = self._post_inbox(payload)
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("cannot follow themselves", resp.json()["detail"])
+
+    def test_follow_withdrawn_deletes_relationship(self):
+        remote_actor = Author.objects.create(
+            display_name="Remote Follow Edge",
+            fqid=self.remote_actor_data["id"],
+            host=self.remote_actor_data["host"],
+            web=self.remote_actor_data["web"],
+            is_local=False,
+        )
+        FollowRelationship.objects.create(
+            follower=remote_actor,
+            followee=self.local_author,
+            status=FollowRelationship.Status.APPROVED,
+        )
+
+        payload = {
+            "type": "follow",
+            "state": "withdrawn",
+            "actor": self.remote_actor_data,
+            "object": self.local_author_object_data,
+        }
+        resp = self._post_inbox(payload)
+        self.assertEqual(resp.status_code, 201)
+        self.assertFalse(
+            FollowRelationship.objects.filter(
+                follower=remote_actor, followee=self.local_author
+            ).exclude(status=FollowRelationship.Status.DENIED).exists()
+        )
+
+    def test_follow_unsupported_state_returns_400(self):
+        payload = {
+            "type": "follow",
+            "state": "bogus_state",
+            "actor": self.remote_actor_data,
+            "object": self.local_author_object_data,
+        }
+        resp = self._post_inbox(payload)
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("Unsupported follow state", resp.json()["detail"])
+
+    def test_follow_accepted_no_existing_outgoing_returns_400(self):
+        payload = {
+            "type": "follow",
+            "state": "accepted",
+            "actor": self.remote_actor_data,
+            "object": self.local_author_object_data,
+        }
+        resp = self._post_inbox(payload)
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("No existing outgoing follow", resp.json()["detail"])
+
+    def test_follow_accepted_state_updates_existing_relationship(self):
+        remote_actor = Author.objects.create(
+            display_name="Remote Follow Edge",
+            fqid=self.remote_actor_data["id"],
+            host=self.remote_actor_data["host"],
+            web=self.remote_actor_data["web"],
+            is_local=False,
+        )
+        rel = FollowRelationship.objects.create(
+            follower=self.local_author,
+            followee=remote_actor,
+            status=FollowRelationship.Status.PENDING,
+        )
+
+        payload = {
+            "type": "follow",
+            "state": "accepted",
+            "actor": self.remote_actor_data,
+            "object": self.local_author_object_data,
+        }
+        resp = self._post_inbox(payload)
+        self.assertEqual(resp.status_code, 201)
+
+        rel.refresh_from_db()
+        self.assertEqual(rel.status, FollowRelationship.Status.APPROVED)
+
+    def test_refollow_after_denial_resets_to_pending(self):
+        remote_actor = Author.objects.create(
+            display_name="Remote Follow Edge",
+            fqid=self.remote_actor_data["id"],
+            host=self.remote_actor_data["host"],
+            web=self.remote_actor_data["web"],
+            is_local=False,
+        )
+        rel = FollowRelationship.objects.create(
+            follower=remote_actor,
+            followee=self.local_author,
+            status=FollowRelationship.Status.DENIED,
+        )
+
+        payload = {
+            "type": "follow",
+            "actor": self.remote_actor_data,
+            "object": self.local_author_object_data,
+        }
+        resp = self._post_inbox(payload)
+        self.assertEqual(resp.status_code, 201)
+
+        rel.refresh_from_db()
+        self.assertEqual(rel.status, FollowRelationship.Status.PENDING)
+
+
+class InboxLikeEdgeCaseTests(_InboxTestMixin, TestCase):
+    """Edge cases for the like payload handler."""
+
+    def setUp(self):
+        self._set_up_inbox()
+        self.remote_author_data = {
+            "type": "author",
+            "id": "https://remote.example/api/authors/remote-like-edge",
+            "host": "https://remote.example/api/",
+            "displayName": "Remote Like Edge",
+            "web": "",
+            "github": "",
+            "profileImage": "",
+        }
+        self.entry = Entry.objects.create(
+            author=self.local_author, content="Like edge target"
+        )
+
+    def test_like_missing_author_returns_400(self):
+        payload = {
+            "type": "like",
+            "object": self.entry.fqid,
+        }
+        resp = self._post_inbox(payload)
+        self.assertEqual(resp.status_code, 400)
+
+    def test_like_missing_object_returns_400(self):
+        payload = {
+            "type": "like",
+            "author": self.remote_author_data,
+        }
+        resp = self._post_inbox(payload)
+        self.assertEqual(resp.status_code, 400)
+
+    def test_like_friends_entry_by_stranger_returns_400(self):
+        friends_entry = Entry.objects.create(
+            author=self.local_author,
+            content="Friends only",
+            visibility=Entry.VISIBILITY_FRIENDS,
+        )
+        stranger_data = {
+            "type": "author",
+            "id": "https://remote.example/api/authors/remote-stranger-like-edge",
+            "host": "https://remote.example/api/",
+            "displayName": "Stranger",
+            "web": "",
+            "github": "",
+            "profileImage": "",
+        }
+        payload = {
+            "type": "like",
+            "author": stranger_data,
+            "object": friends_entry.fqid,
+        }
+        resp = self._post_inbox(payload)
+        self.assertEqual(resp.status_code, 400)
+        self.assertFalse(EntryLike.objects.filter(entry=friends_entry).exists())
+
+
+class InboxCommentEdgeCaseTests(_InboxTestMixin, TestCase):
+    """Edge cases for the comment payload handler."""
+
+    def setUp(self):
+        self._set_up_inbox()
+        self.entry = Entry.objects.create(
+            author=self.local_author,
+            content="Comment edge target",
+            visibility=Entry.VISIBILITY_PUBLIC,
+        )
+        self.remote_author_data = {
+            "type": "author",
+            "id": "https://remote.example/api/authors/remote-comment-edge",
+            "host": "https://remote.example/api/",
+            "displayName": "Remote Commenter Edge",
+            "web": "",
+            "github": "",
+            "profileImage": "",
+        }
+
+    def test_comment_missing_author_returns_400(self):
+        payload = {
+            "type": "comment",
+            "id": "https://remote.example/api/authors/a/commented/c1",
+            "entry": self.entry.fqid,
+            "comment": "Some comment",
+        }
+        resp = self._post_inbox(payload)
+        self.assertEqual(resp.status_code, 400)
+
+    def test_comment_missing_entry_fqid_returns_400(self):
+        payload = {
+            "type": "comment",
+            "id": "https://remote.example/api/authors/a/commented/c2",
+            "comment": "Some comment",
+            "author": self.remote_author_data,
+        }
+        resp = self._post_inbox(payload)
+        self.assertEqual(resp.status_code, 400)
+
+    def test_comment_nonexistent_entry_returns_400(self):
+        payload = {
+            "type": "comment",
+            "id": "https://remote.example/api/authors/a/commented/c3",
+            "entry": "http://testserver/api/authors/00000000-0000-0000-0000-000000000000/entries/00000000-0000-0000-0000-000000000000",
+            "comment": "Comment on ghost",
+            "author": self.remote_author_data,
+        }
+        resp = self._post_inbox(payload)
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("not found", resp.json()["detail"])
+
+    def test_comment_empty_text_returns_400(self):
+        payload = {
+            "type": "comment",
+            "id": "https://remote.example/api/authors/a/commented/c4",
+            "entry": self.entry.fqid,
+            "comment": "   ",
+            "author": self.remote_author_data,
+        }
+        resp = self._post_inbox(payload)
+        self.assertEqual(resp.status_code, 400)
+
+    def test_comment_unsupported_content_type_returns_400(self):
+        payload = {
+            "type": "comment",
+            "id": "https://remote.example/api/authors/a/commented/c5",
+            "entry": self.entry.fqid,
+            "comment": "Some comment",
+            "contentType": "application/xml",
+            "author": self.remote_author_data,
+        }
+        resp = self._post_inbox(payload)
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("Unsupported contentType", resp.json()["detail"])
+
+    def test_comment_on_friends_entry_by_stranger_returns_400(self):
+        friends_entry = Entry.objects.create(
+            author=self.local_author,
+            content="Friends only entry for comment",
+            visibility=Entry.VISIBILITY_FRIENDS,
+        )
+        stranger_data = {
+            "type": "author",
+            "id": "https://remote.example/api/authors/remote-comment-stranger",
+            "host": "https://remote.example/api/",
+            "displayName": "Comment Stranger",
+            "web": "",
+            "github": "",
+            "profileImage": "",
+        }
+        payload = {
+            "type": "comment",
+            "id": "https://remote.example/api/authors/a/commented/c6",
+            "entry": friends_entry.fqid,
+            "comment": "Stranger comment",
+            "author": stranger_data,
+        }
+        resp = self._post_inbox(payload)
+        self.assertEqual(resp.status_code, 400)
+        self.assertFalse(Comment.objects.filter(entry=friends_entry).exists())
+
+    def test_comment_without_fqid_uses_fallback(self):
+        payload = {
+            "type": "comment",
+            "entry": self.entry.fqid,
+            "comment": "Fallback comment no fqid",
+            "author": self.remote_author_data,
+        }
+        resp = self._post_inbox(payload)
+        self.assertEqual(resp.status_code, 201)
+        self.assertTrue(
+            Comment.objects.filter(entry=self.entry, comment="Fallback comment no fqid").exists()
+        )
+
+
+class InboxCommentDeleteEdgeCaseTests(_InboxTestMixin, TestCase):
+    """Edge cases for the comment_delete payload handler."""
+
+    def setUp(self):
+        self._set_up_inbox()
+
+    def test_comment_delete_nonexistent_returns_200_not_deleted(self):
+        payload = {
+            "type": "comment_delete",
+            "id": "https://remote.example/api/authors/a/commented/nonexistent",
+        }
+        resp = self._post_inbox(payload)
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertFalse(data["deleted"])
+
+    def test_comment_delete_missing_id_returns_400(self):
+        payload = {
+            "type": "comment_delete",
+        }
+        resp = self._post_inbox(payload)
+        self.assertEqual(resp.status_code, 400)
+
+
+class InboxEntriesBatchTests(_InboxTestMixin, TestCase):
+    """Tests for the 'entries' (batch) payload type."""
+
+    def setUp(self):
+        self._set_up_inbox()
+        self.remote_author_data = {
+            "type": "author",
+            "id": "https://remote.example/api/authors/remote-batch-author",
+            "host": "https://remote.example/api/",
+            "displayName": "Remote Batch Author",
+            "web": "https://remote.example/authors/remote-batch-author",
+            "github": "",
+            "profileImage": "",
+        }
+
+    def test_entries_batch_creates_entries(self):
+        payload = {
+            "type": "entries",
+            "src": [
+                {
+                    "type": "entry",
+                    "id": "https://remote.example/api/authors/remote-batch-author/entries/b1",
+                    "title": "Batch 1",
+                    "content": "Batch content 1",
+                    "contentType": "text/plain",
+                    "visibility": "PUBLIC",
+                    "published": "2026-01-01T00:00:00Z",
+                    "author": self.remote_author_data,
+                },
+                {
+                    "type": "entry",
+                    "id": "https://remote.example/api/authors/remote-batch-author/entries/b2",
+                    "title": "Batch 2",
+                    "content": "Batch content 2",
+                    "contentType": "text/plain",
+                    "visibility": "PUBLIC",
+                    "published": "2026-01-01T00:00:00Z",
+                    "author": self.remote_author_data,
+                },
+            ],
+        }
+        resp = self._post_inbox(payload)
+        self.assertEqual(resp.status_code, 201)
+        data = resp.json()
+        self.assertEqual(data["created"], 2)
+        self.assertEqual(data["updated"], 0)
+
+    def test_entries_batch_empty_src(self):
+        payload = {"type": "entries", "src": []}
+        resp = self._post_inbox(payload)
+        self.assertEqual(resp.status_code, 201)
+        data = resp.json()
+        self.assertEqual(data["created"], 0)
+        self.assertEqual(data["updated"], 0)
+
+    def test_entries_batch_invalid_src_returns_400(self):
+        payload = {"type": "entries", "src": "not-a-list"}
+        resp = self._post_inbox(payload)
+        self.assertEqual(resp.status_code, 400)
+
+    def test_entries_batch_non_dict_item_returns_400(self):
+        payload = {"type": "entries", "src": ["not-a-dict"]}
+        resp = self._post_inbox(payload)
+        self.assertEqual(resp.status_code, 400)
