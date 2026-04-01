@@ -1464,16 +1464,15 @@ def _remote_node_allowed_visibilities(request: HttpRequest, author: Author) -> l
     if has_approved_follower:
         allowed.extend([Entry.VISIBILITY_UNLISTED])
 
-    remote_friend_ids = FollowRelationship.objects.filter(
-    follower=author,
-    status=FollowRelationship.Status.APPROVED,
-    ).values("followee_id")
-
     has_friend = FollowRelationship.objects.filter(
-        follower__in=remote_authors,
-        followee=author,
-        status=FollowRelationship.Status.APPROVED,
-        follower_id__in=remote_friend_ids,
+    follower__in=remote_authors,
+    followee=author,
+    status=FollowRelationship.Status.APPROVED,
+    ).filter(
+        follower__in=FollowRelationship.objects.filter(
+            follower=author,
+            status=FollowRelationship.Status.APPROVED,
+        ).values("followee")
     ).exists()
 
     if has_friend:
