@@ -225,7 +225,7 @@ def _sync_remote_entries_for_stream(viewer: Author | None):
                         handle_remote_entry_payload(payload)
                     except Exception:
                         continue
-                # delete_remote_entry_payload(items, remote_author)
+                delete_remote_entry_payload(items, remote_author)
             except Exception:
                 continue
 
