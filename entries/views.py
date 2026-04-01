@@ -358,22 +358,20 @@ def get_profile_entry_visibilities(viewer, author) -> list:
             Entry.VISIBILITY_UNLISTED,
         ]
 
-    approved_follow = (
+    is_following = (
         viewer
         and FollowRelationship.objects.filter(
             follower=viewer,
             followee=author,
-            status=FollowRelationship.Status.APPROVED,
-        ).exists()
+        ).exclude(status=FollowRelationship.Status.DENIED).exists()
     )
 
     if author.is_local:
-        if approved_follow:
+        if is_following:
             return [Entry.VISIBILITY_PUBLIC, Entry.VISIBILITY_UNLISTED]
-        return [Entry.VISIBILITY_PUBLIC]
+    return [Entry.VISIBILITY_PUBLIC]
 
-    # Remote author: PUBLIC is visible by default; UNLISTED requires approved follow.
-    if approved_follow:
+    if is_following:
         return [Entry.VISIBILITY_PUBLIC, Entry.VISIBILITY_UNLISTED]
     return [Entry.VISIBILITY_PUBLIC]
 
@@ -402,9 +400,10 @@ def _stream_entries_queryset(request: HttpRequest | None = None):
     following_ids = set(
         FollowRelationship.objects.filter(
             follower=viewer,
-            status=FollowRelationship.Status.APPROVED,
             followee__is_deleted=False,
-        ).values_list("followee_id", flat=True)
+        )
+        .exclude(status=FollowRelationship.Status.DENIED)
+        .values_list("followee_id", flat=True)
     )
 
     return base.filter(
@@ -1456,14 +1455,13 @@ def _remote_node_allowed_visibilities(request: HttpRequest, author: Author) -> l
 
     allowed = [Entry.VISIBILITY_PUBLIC]
 
-    has_approved_follower = FollowRelationship.objects.filter(
+    has_follower = FollowRelationship.objects.filter(
         follower__in=remote_authors,
         followee=author,
-        status=FollowRelationship.Status.APPROVED,
-    ).exists()
+    ).exclude(status=FollowRelationship.Status.DENIED).exists()
 
-    if has_approved_follower:
-        allowed.extend([Entry.VISIBILITY_UNLISTED])
+    if has_follower:
+        allowed.append(Entry.VISIBILITY_UNLISTED)
 
     has_friend = FollowRelationship.objects.filter(
     follower__in=remote_authors,
