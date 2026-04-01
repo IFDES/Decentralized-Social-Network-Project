@@ -1,5 +1,5 @@
 import json
-from urllib.parse import unquote
+from urllib.parse import unquote, urlsplit
 
 from django.contrib.auth.decorators import login_required
 from django.http import (
@@ -159,7 +159,11 @@ def follow_ui_page(request: HttpRequest) -> HttpResponse:
         from django.conf import settings as _settings
         local_base = _settings.SERVICE_BASE_URL.rstrip("/")
 
-        remote_nodes = RemoteNode.objects.filter(is_active=True).order_by("-added_at")
+        remote_nodes = RemoteNode.objects.filter(is_active=True)
+        remote_nodes_api = []
+        for node in remote_nodes:
+            remote_nodes_api.append(f"{node.base_url}/api")
+            remote_nodes_api.append(f"{node.base_url}/api/")
         existing_followee_ids = set(rel_by_followee_id.keys())
 
         discovered_remote_authors_by_id = {}
@@ -199,6 +203,16 @@ def follow_ui_page(request: HttpRequest) -> HttpResponse:
                     author_id = author_data.get("id", "")
                     if isinstance(author_id, str) and author_id.startswith(f"{local_base}/"):
                         continue
+
+                    # Skip authors that do not belong to any remote node
+                    if author_data["host"] not in remote_nodes_api:
+                        continue
+                    
+                    x = urlsplit(author_data["id"])
+                    if f"{x.scheme}://{x.netloc}/api" not in remote_nodes_api:
+                        continue
+                    # end of skip logic
+
                     try:
                         remote_author = upsert_remote_author(author_data)
                     except Exception:

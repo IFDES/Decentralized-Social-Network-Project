@@ -117,7 +117,7 @@ def fetch_remote_author_json(author_fqid: str, timeout: int = 10) -> dict:
 
     if not isinstance(data, dict):
         raise ValueError("Remote author endpoint returned an unexpected payload.")
-
+    
     return data
 
 
