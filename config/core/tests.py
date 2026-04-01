@@ -1,15 +1,26 @@
 import base64
+import uuid
 from unittest.mock import patch, MagicMock
 
 from django.contrib.auth import get_user_model
-from django.http import JsonResponse
+from django.contrib.auth.models import AnonymousUser
+from django.http import HttpResponse, JsonResponse
 from django.test import TestCase, RequestFactory, override_settings
 
+from authors.models import Author, AuthorAccount
 from config.core.authentication import NodeBasicAuthBackend, NodeDisabled
+from config.core.cors import LocalCorsMiddleware
 from config.core.middleware import BasicAuthMiddleware
 from config.core.models import RemoteNode
-from config.core.permissions import is_node_request, require_node_auth
+from config.core.permissions import (
+    is_node_request,
+    require_admin_user,
+    require_node_auth,
+    user_matches_author_uuid,
+    user_owns_object_via_author,
+)
 from config.core.request_utils import make_node_request
+from config.core.serializers import author_to_json
 
 User = get_user_model()
 
@@ -19,11 +30,16 @@ def _basic_auth_header(username, password):
     return f"Basic {cred}"
 
 
-# ── A trivial view protected by @require_node_auth for testing ──────────
+# ── Trivial views protected by decorators for testing ───────────────────
 
 @require_node_auth
 def _protected_view(request):
     return JsonResponse({"ok": True})
+
+
+@require_admin_user
+def _admin_view(request):
+    return JsonResponse({"admin_ok": True})
 
 
 # ── Helper to create a RemoteNode with known incoming credentials ───────
@@ -357,3 +373,200 @@ class OutgoingRequestTests(TestCase):
         resp = make_node_request(self.node, "GET", "api/authors")
         mock_request.assert_called_once()
         self.assertEqual(resp.status_code, 200)
+
+
+class RequireAdminUserDecoratorTests(TestCase):
+    """Tests for @require_admin_user decorator."""
+
+    def setUp(self):
+        self.factory = RequestFactory()
+
+    def _run(self, user):
+        request = self.factory.get("/admin-only/")
+        request.user = user
+        return _admin_view(request)
+
+    def test_anonymous_returns_401(self):
+        resp = self._run(AnonymousUser())
+        self.assertEqual(resp.status_code, 401)
+
+    def test_regular_user_returns_403(self):
+        user = User.objects.create_user(username="regular", password="pass")
+        resp = self._run(user)
+        self.assertEqual(resp.status_code, 403)
+
+    def test_staff_user_returns_200(self):
+        user = User.objects.create_user(username="staffuser", password="pass", is_staff=True)
+        resp = self._run(user)
+        self.assertEqual(resp.status_code, 200)
+
+    def test_superuser_returns_200(self):
+        user = User.objects.create_user(username="superuser", password="pass", is_superuser=True)
+        resp = self._run(user)
+        self.assertEqual(resp.status_code, 200)
+
+
+class UserMatchesAuthorUuidTests(TestCase):
+    """Tests for user_matches_author_uuid()."""
+
+    def setUp(self):
+        self.factory = RequestFactory()
+        self.user = User.objects.create_user(username="alice", password="pass")
+        self.author = Author.objects.create(display_name="Alice")
+        AuthorAccount.objects.create(user=self.user, author=self.author)
+
+    def _req(self, user):
+        request = self.factory.get("/")
+        request.user = user
+        return request
+
+    def test_anonymous_returns_false(self):
+        self.assertFalse(user_matches_author_uuid(self._req(AnonymousUser()), self.author.uuid))
+
+    def test_user_without_author_account_returns_false(self):
+        other = User.objects.create_user(username="bob", password="pass")
+        self.assertFalse(user_matches_author_uuid(self._req(other), self.author.uuid))
+
+    def test_correct_uuid_returns_true(self):
+        self.assertTrue(user_matches_author_uuid(self._req(self.user), self.author.uuid))
+
+    def test_wrong_uuid_returns_false(self):
+        self.assertFalse(user_matches_author_uuid(self._req(self.user), uuid.uuid4()))
+
+
+class UserOwnsObjectViaAuthorTests(TestCase):
+    """Tests for user_owns_object_via_author()."""
+
+    def setUp(self):
+        self.factory = RequestFactory()
+        self.user = User.objects.create_user(username="carol", password="pass")
+        self.author = Author.objects.create(display_name="Carol")
+        AuthorAccount.objects.create(user=self.user, author=self.author)
+
+    def _req(self, user):
+        request = self.factory.get("/")
+        request.user = user
+        return request
+
+    def _obj(self, author_val):
+        class Fake:
+            pass
+        o = Fake()
+        o.author = author_val
+        return o
+
+    def test_object_without_author_attr_returns_false(self):
+        self.assertFalse(user_owns_object_via_author(self._req(self.user), object()))
+
+    def test_owner_uuid_returns_true(self):
+        self.assertTrue(user_owns_object_via_author(self._req(self.user), self._obj(self.author.uuid)))
+
+    def test_wrong_uuid_returns_false(self):
+        self.assertFalse(user_owns_object_via_author(self._req(self.user), self._obj(uuid.uuid4())))
+
+
+class AuthorToJsonTests(TestCase):
+    """Tests for author_to_json() serializer."""
+
+    def _make_author(self, **kwargs):
+        defaults = dict(
+            display_name="Test User",
+            fqid="https://node.example.com/api/authors/abc",
+            host="https://node.example.com/api",
+            web="https://node.example.com/authors/abc",
+            github="https://github.com/testuser",
+            profile_image="https://example.com/avatar.png",
+        )
+        defaults.update(kwargs)
+        return Author.objects.create(**defaults)
+
+    def test_type_is_author(self):
+        author = self._make_author()
+        data = author_to_json(author)
+        self.assertEqual(data["type"], "author")
+
+    def test_uses_existing_fqid(self):
+        author = self._make_author(fqid="https://node.example.com/api/authors/xyz")
+        data = author_to_json(author)
+        self.assertEqual(data["id"], "https://node.example.com/api/authors/xyz")
+
+    @override_settings(SERVICE_BASE_URL="http://testserver")
+    def test_builds_fqid_when_missing(self):
+        author = self._make_author(fqid=None)
+        data = author_to_json(author)
+        self.assertIn(str(author.uuid), data["id"])
+        self.assertIn("testserver", data["id"])
+
+    def test_display_name_field(self):
+        author = self._make_author(display_name="Jane Doe")
+        data = author_to_json(author)
+        self.assertEqual(data["displayName"], "Jane Doe")
+
+    def test_github_and_profile_image(self):
+        author = self._make_author(
+            github="https://github.com/jdoe",
+            profile_image="https://example.com/pic.jpg",
+        )
+        data = author_to_json(author)
+        self.assertEqual(data["github"], "https://github.com/jdoe")
+        self.assertEqual(data["profileImage"], "https://example.com/pic.jpg")
+
+    def test_required_keys_present(self):
+        author = self._make_author()
+        data = author_to_json(author)
+        for key in ("type", "id", "host", "displayName", "github", "profileImage", "web"):
+            self.assertIn(key, data)
+
+
+class LocalCorsMiddlewareTests(TestCase):
+    """Tests for LocalCorsMiddleware."""
+
+    def setUp(self):
+        self.factory = RequestFactory()
+        self.mw = LocalCorsMiddleware(lambda req: HttpResponse("ok"))
+
+    def _get(self, origin=None, method="GET"):
+        request = self.factory.generic(method, "/api/authors")
+        if origin:
+            request.META["HTTP_ORIGIN"] = origin
+        return request
+
+    def test_non_local_origin_preflight_not_intercepted(self):
+        request = self._get(origin="https://evil.example.com", method="OPTIONS")
+        resp = self.mw.process_request(request)
+        self.assertIsNone(resp)
+
+    def test_no_origin_not_intercepted(self):
+        request = self._get()
+        resp = self.mw.process_request(request)
+        self.assertIsNone(resp)
+
+    def test_local_origin_options_returns_204(self):
+        request = self._get(origin="http://localhost:8001", method="OPTIONS")
+        resp = self.mw.process_request(request)
+        self.assertIsNotNone(resp)
+        self.assertEqual(resp.status_code, 204)
+
+    def test_local_origin_options_has_cors_headers(self):
+        request = self._get(origin="http://127.0.0.1:8001", method="OPTIONS")
+        resp = self.mw.process_request(request)
+        self.assertEqual(resp["Access-Control-Allow-Origin"], "http://127.0.0.1:8001")
+        self.assertEqual(resp["Access-Control-Allow-Credentials"], "true")
+
+    def test_local_get_not_intercepted_by_process_request(self):
+        request = self._get(origin="http://localhost:8000", method="GET")
+        resp = self.mw.process_request(request)
+        self.assertIsNone(resp)
+
+    def test_process_response_adds_cors_headers_for_local_origin(self):
+        request = self._get(origin="http://localhost:3000")
+        response = HttpResponse("data")
+        result = self.mw.process_response(request, response)
+        self.assertEqual(result["Access-Control-Allow-Origin"], "http://localhost:3000")
+        self.assertEqual(result["Access-Control-Allow-Credentials"], "true")
+
+    def test_process_response_no_headers_for_non_local_origin(self):
+        request = self._get(origin="https://external.com")
+        response = HttpResponse("data")
+        result = self.mw.process_response(request, response)
+        self.assertNotIn("Access-Control-Allow-Origin", result)
