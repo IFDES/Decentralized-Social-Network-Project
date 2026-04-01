@@ -77,6 +77,11 @@ def _get_current_author(request: HttpRequest):
         return None
     return author
 
+def _delete_remote_authors(remote_nodes_api:list):
+    local_remote_authors = Author.objects.filter(is_deleted=False, is_local=False)
+    for local_remote_author in local_remote_authors:
+        if local_remote_author.fqid not in remote_nodes_api:
+            local_remote_author.delete()
 
 @login_required
 def follow_ui_page(request: HttpRequest) -> HttpResponse:
@@ -164,12 +169,14 @@ def follow_ui_page(request: HttpRequest) -> HttpResponse:
         for node in remote_nodes:
             remote_nodes_api.append(f"{node.base_url}/api")
             remote_nodes_api.append(f"{node.base_url}/api/")
+
         existing_followee_ids = set(rel_by_followee_id.keys())
 
         discovered_remote_authors_by_id = {}
         page_size = 50
         max_pages_per_node = 50  # safety to avoid unbounded UI/network calls
 
+        _delete_remote_authors(remote_nodes_api)
         for node in remote_nodes:
             page = 1
             for _ in range(max_pages_per_node):
