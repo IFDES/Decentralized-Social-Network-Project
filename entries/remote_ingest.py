@@ -55,6 +55,20 @@ def upsert_remote_author(author_data: dict) -> Author:
 
     return author
 
+def delete_remote_entry_payload(inc_entries, author):
+    """
+    Deletes any remote entry saved locally that we do not receive in the latest pull.
+    """
+    try:
+        local_entries = Entry.objects.filter(author=author)
+        inc_entries_id = [entry["id"].rstrip("/") for entry in inc_entries]
+        for local_entry in local_entries:
+            if local_entry.fqid not in inc_entries_id:
+                local_entry.delete()
+    except:
+        raise ValueError("Failed to delete remote entry payload.")
+
+
 
 def handle_remote_entry_payload(payload: dict):
     """

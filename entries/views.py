@@ -47,7 +47,7 @@ from .visibility import (
     get_visible_comments_queryset,
     is_node_admin,
 )
-from .remote_ingest import handle_remote_entry_payload
+from .remote_ingest import handle_remote_entry_payload, delete_remote_entry_payload
 
 import base64
 import binascii
@@ -173,16 +173,6 @@ def _reconcile_hosted_images(request: HttpRequest, entry: Entry) -> None:
             hosted.entry = None
             hosted.save(update_fields=["entry"])
 
-
-def _should_ingest_remote_entry_for_viewer(entry_payload: dict, remote_author: Author, viewer: Author | None) -> bool:
-    """
-    Decide whether to ingest a pulled remote entry into our DB.
-
-    Current policy: ingest anything that looks like a dict; visibility is
-    enforced at read time (stream/detail), not at pull time.
-    """
-    return isinstance(entry_payload, dict)
-
 def _sync_remote_entries_for_stream(viewer: Author | None):
     """
     Sync remote entries for the stream.
@@ -231,12 +221,11 @@ def _sync_remote_entries_for_stream(viewer: Author | None):
                 for payload in items:
                     if not isinstance(payload, dict):
                         continue
-                    if not _should_ingest_remote_entry_for_viewer(payload, remote_author, viewer):
-                        continue
                     try:
                         handle_remote_entry_payload(payload)
                     except Exception:
                         continue
+                delete_remote_entry_payload(items, remote_author)
             except Exception:
                 continue
 
@@ -390,17 +379,6 @@ def get_profile_entry_visibilities(viewer, author) -> list:
 
 
 def _stream_entries_queryset(request: HttpRequest | None = None):
-    """
-    Canonical stream queryset:
-    - anonymous:
-        * local PUBLIC only
-    - authenticated:
-        * local PUBLIC from local authors
-        * remote PUBLIC/UNLISTED only from APPROVED followees
-        * local UNLISTED only from APPROVED followees
-        * FRIENDS only from mutual APPROVED follows
-    - never show deleted entries/authors
-    """
     base = (
         Entry.objects.filter(
             is_deleted=False,

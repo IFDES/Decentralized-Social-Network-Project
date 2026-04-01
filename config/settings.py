@@ -20,7 +20,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # ---------------------------------------------------------------------------
 # Service base URL for FQIDs (Fully Qualified IDs)
 # ---------------------------------------------------------------------------
-SERVICE_BASE_URL = os.environ.get("SERVICE_BASE_URL", "http://127.0.0.1:8001").rstrip(
+SERVICE_BASE_URL = os.environ.get("SERVICE_BASE_URL", "http://127.0.0.1:8000").rstrip(
     "/"
 )
 
