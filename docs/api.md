@@ -545,19 +545,37 @@ Node-hosted images can be uploaded and served at stable URLs suitable for embedd
 
 ## Follow API
 
-Follow relationships represent one author wanting to follow another. A follow goes through states: **requesting** (pending approval) → **accepted** (approved) or **rejected** (denied). All follow endpoints are author-scoped and require the caller to be authenticated as the author in the URL path.
+Follow relationships represent one author wanting to follow another. A follow goes through states: **requesting** (pending approval) → **accepted** (approved) or **rejected** (denied).
 
-FQIDs (fully qualified IDs) used in follow URL paths must be **percent-encoded**, e.g. `http%3A%2F%2F127.0.0.1%3A8000%2Fapi%2Fauthors%2F111`.
+FQIDs used in follow URL paths must be **percent-encoded**, e.g. `http%3A%2F%2F127.0.0.1%3A8000%2Fapi%2Fauthors%2F111`.
+
+---
 
 ### GET /api/authors/{AUTHOR_SERIAL}/following
 
-- **When to use**: List the authors that `{AUTHOR_SERIAL}` is following (includes both pending and approved).
-- **Auth**: Must be authenticated as `{AUTHOR_SERIAL}` (owner-only).
+- **When to use**: List all authors that `{AUTHOR_SERIAL}` is following, including both pending and approved relationships. Use this when an author wants to see who they are following.
+- **Auth**: Must be authenticated as `{AUTHOR_SERIAL}` (owner-only). Returns `403` if not the owner.
+- **Why not remote**: This is a local-only endpoint; a remote node has no reason to inspect another node's outgoing follow list.
+
+#### Request
+
+- **Method**: `GET`
+- **Path params**: `AUTHOR_SERIAL` — UUID of the local author.
 
 #### Response
 
-- **Status**: `200 OK`, or `403 Forbidden` if not the owner.
+- **Status**: `200 OK`
+- **Status**: `403 Forbidden` if not the owner.
 - **Body** (`application/json`):
+
+| Field | Type | Example | Purpose |
+|-------|------|---------|---------|
+| `type` | string | `"following"` | Identifies this as a following list |
+| `following` | array | `[...]` | Array of author objects (pending + approved) |
+
+Each item in `following` is a full author object.
+
+#### Example response
 
 ```json
 {
@@ -580,13 +598,24 @@ FQIDs (fully qualified IDs) used in follow URL paths must be **percent-encoded**
 
 ### GET /api/authors/{AUTHOR_SERIAL}/following/{FOREIGN_AUTHOR_FQID}
 
-- **When to use**: Check whether `{AUTHOR_SERIAL}` is following the author identified by `{FOREIGN_AUTHOR_FQID}`.
-- **Auth**: Must be authenticated as `{AUTHOR_SERIAL}`.
+- **When to use**: Check whether `{AUTHOR_SERIAL}` is currently following (pending or approved) the author identified by `{FOREIGN_AUTHOR_FQID}`. Use this to drive UI state (e.g. show "Following" vs "Follow" button).
+- **Auth**: Must be authenticated as `{AUTHOR_SERIAL}` (owner-only).
+- **Why**: Exposes only the requesting author's own follow state, so it is owner-scoped.
+
+#### Request
+
+- **Method**: `GET`
+- **Path params**:
+  - `AUTHOR_SERIAL` — UUID of the local author.
+  - `FOREIGN_AUTHOR_FQID` — percent-encoded FQID of the author being checked.
 
 #### Response
 
-- **Status**: `200 OK` with the followed author object if a pending or approved relationship exists, or `404 Not Found` if not following.
-- **Body** (`application/json`) on 200:
+- **Status**: `200 OK` — a pending or approved follow exists. Body is the followed author object.
+- **Status**: `404 Not Found` — no follow relationship exists.
+- **Status**: `403 Forbidden` — not authenticated as the owner.
+
+#### Example response (`200 OK`)
 
 ```json
 {
@@ -600,23 +629,49 @@ FQIDs (fully qualified IDs) used in follow URL paths must be **percent-encoded**
 }
 ```
 
+---
+
 ### PUT /api/authors/{AUTHOR_SERIAL}/following/{FOREIGN_AUTHOR_FQID}
 
-- **When to use**: Create a follow request from `{AUTHOR_SERIAL}` to `{FOREIGN_AUTHOR_FQID}`. If a previously denied request exists, it is re-set to pending.
-- **Auth**: Must be authenticated as `{AUTHOR_SERIAL}`.
+- **When to use**: Initiate a follow request from `{AUTHOR_SERIAL}` to `{FOREIGN_AUTHOR_FQID}`. If a previously denied request exists, it is re-set to pending. For remote authors, the follow request is POSTed to the remote author's inbox automatically. For local authors, the request is stored as pending until the followee approves it.
+- **Auth**: Must be authenticated as `{AUTHOR_SERIAL}` (owner-only).
+- **Why not remote**: Only the local author's own node initiates follow requests on their behalf.
 
 #### Request
 
 - **Method**: `PUT`
+- **Path params**:
+  - `AUTHOR_SERIAL` — UUID of the local author initiating the follow.
+  - `FOREIGN_AUTHOR_FQID` — percent-encoded FQID of the author to follow. For remote authors this must be the full URL of the author on their home node.
 - **Body**: None required.
+
+#### Behaviour
+
+- If no relationship exists: creates it as `PENDING` (local target) or `APPROVED` (remote target — per spec, treat remote follows as immediately followed from the actor's node perspective, even before the remote author accepts).
+- If a `DENIED` relationship exists: resets it to `PENDING`/`APPROVED` and re-sends the request.
+- If already `PENDING` or `APPROVED`: returns `200 OK` with no change.
+- For remote targets: POSTs a follow request object to `{FOREIGN_AUTHOR_HOST}/api/authors/{FOREIGN_SERIAL}/inbox`.
+- On success for a remote author that is already `APPROVED`: also distributes existing entries from `{AUTHOR_SERIAL}` to the remote follower's inbox.
 
 #### Response
 
-- **Status**: `201 Created` if newly created, `200 OK` if already existed.
-- **Status**: `400 Bad Request` if trying to follow yourself or a remote author (remote not yet supported).
-- **Status**: `403 Forbidden` if not the owner.
-- **Status**: `404 Not Found` if the target author does not exist.
+- **Status**: `201 Created` — new follow relationship created or previously-denied request re-sent.
+- **Status**: `200 OK` — relationship already existed.
+- **Status**: `400 Bad Request` — tried to follow yourself, or remote fetch/distribution failed.
+- **Status**: `403 Forbidden` — not the owner.
+- **Status**: `404 Not Found` — target author does not exist locally and could not be fetched remotely.
+- **Status**: `502 Bad Gateway` — remote node unreachable.
 - **Body** (`application/json`):
+
+| Field | Type | Example | Purpose |
+|-------|------|---------|---------|
+| `type` | string | `"follow"` | Object type |
+| `summary` | string | `"UserA wants to follow UserB"` | Human-readable description |
+| `state` | string | `"requesting"` or `"accepted"` | Current follow state |
+| `actor` | author object | `{...}` | The author sending the follow |
+| `object` | author object | `{...}` | The author being followed |
+
+#### Example response (`201 Created`)
 
 ```json
 {
@@ -644,28 +699,52 @@ FQIDs (fully qualified IDs) used in follow URL paths must be **percent-encoded**
 }
 ```
 
+---
+
 ### DELETE /api/authors/{AUTHOR_SERIAL}/following/{FOREIGN_AUTHOR_FQID}
 
-- **When to use**: Unfollow the target author. Deletes the follow relationship entirely.
-- **Auth**: Must be authenticated as `{AUTHOR_SERIAL}`.
+- **When to use**: Unfollow the target author. Permanently deletes the follow relationship record regardless of whether it was pending or approved. Use when the local author wants to stop following someone.
+- **Auth**: Must be authenticated as `{AUTHOR_SERIAL}` (owner-only).
+- **Why**: Only the follower should be able to remove their own outgoing follow.
+
+#### Request
+
+- **Method**: `DELETE`
+- **Path params**:
+  - `AUTHOR_SERIAL` — UUID of the local author unfollowing.
+  - `FOREIGN_AUTHOR_FQID` — percent-encoded FQID of the author to unfollow.
 
 #### Response
 
-- **Status**: `204 No Content` on success.
-- **Status**: `404 Not Found` if no follow relationship existed.
-- **Status**: `403 Forbidden` if not the owner.
+- **Status**: `204 No Content` — relationship deleted.
+- **Status**: `404 Not Found` — no follow relationship existed.
+- **Status**: `403 Forbidden` — not the owner.
 
 ---
 
 ### GET /api/authors/{AUTHOR_SERIAL}/followers
 
-- **When to use**: List the approved followers of `{AUTHOR_SERIAL}`.
-- **Auth**: Must be authenticated as `{AUTHOR_SERIAL}` (owner-only).
+- **When to use**: List all **approved** followers of `{AUTHOR_SERIAL}`. Use when displaying who follows an author, or when a remote node needs to verify the follower list.
+- **Auth**: Must be authenticated as `{AUTHOR_SERIAL}` (owner) **or** as an authenticated remote node (HTTP Basic Auth). Remote nodes may use this to verify whether a follow was accepted.
+- **Why both**: The spec marks this `[local, remote]`.
+
+#### Request
+
+- **Method**: `GET`
+- **Path params**: `AUTHOR_SERIAL` — UUID of the local author.
 
 #### Response
 
-- **Status**: `200 OK`, or `403 Forbidden` if not the owner.
+- **Status**: `200 OK`
+- **Status**: `403 Forbidden` — not the owner and not an authenticated remote node.
 - **Body** (`application/json`):
+
+| Field | Type | Example | Purpose |
+|-------|------|---------|---------|
+| `type` | string | `"followers"` | Identifies this as a followers list |
+| `followers` | array | `[...]` | Array of author objects (approved followers only; pending is excluded) |
+
+#### Example response
 
 ```json
 {
@@ -673,12 +752,12 @@ FQIDs (fully qualified IDs) used in follow URL paths must be **percent-encoded**
   "followers": [
     {
       "type": "author",
-      "id": "http://127.0.0.1:8000/api/authors/a-uuid",
-      "host": "http://127.0.0.1:8000/api/",
-      "displayName": "UserA",
-      "web": "http://127.0.0.1:8000/authors/a-uuid",
-      "github": "",
-      "profileImage": ""
+      "id": "http://nodebbbb/api/authors/222",
+      "host": "http://nodebbbb/api/",
+      "displayName": "Lara Croft",
+      "web": "http://nodebbbb/authors/222",
+      "github": "http://github.com/laracroft",
+      "profileImage": "http://nodebbbb/api/authors/222/entries/217/image"
     }
   ]
 }
@@ -688,29 +767,75 @@ FQIDs (fully qualified IDs) used in follow URL paths must be **percent-encoded**
 
 ### GET /api/authors/{AUTHOR_SERIAL}/followers/{FOREIGN_AUTHOR_FQID}
 
-- **When to use**: Check whether `{FOREIGN_AUTHOR_FQID}` is an approved follower of `{AUTHOR_SERIAL}`.
-- **Auth**: Must be authenticated as `{AUTHOR_SERIAL}`.
+- **When to use**: Check whether `{FOREIGN_AUTHOR_FQID}` is an **approved** follower of `{AUTHOR_SERIAL}`. Use to verify a follow was accepted. Note: a pending follow request does NOT satisfy this check — only `APPROVED` status returns `200`.
+- **Auth**: Must be authenticated as `{AUTHOR_SERIAL}` (owner) **or** as an authenticated remote node.
+
+#### Request
+
+- **Method**: `GET`
+- **Path params**:
+  - `AUTHOR_SERIAL` — UUID of the local author being followed.
+  - `FOREIGN_AUTHOR_FQID` — percent-encoded FQID of the potential follower.
 
 #### Response
 
-- **Status**: `200 OK` with the follower's author object, or `404 Not Found` if not an approved follower.
+- **Status**: `200 OK` — `FOREIGN_AUTHOR_FQID` is an approved follower. Body is the follower's author object.
+- **Status**: `404 Not Found` — not an approved follower (pending is not sufficient).
+- **Status**: `403 Forbidden` — not authorized.
+
+#### Example response (`200 OK`)
+
+```json
+{
+  "type": "author",
+  "id": "http://nodebbbb/api/authors/222",
+  "host": "http://nodebbbb/api/",
+  "displayName": "Lara Croft",
+  "web": "http://nodebbbb/authors/222",
+  "github": "http://github.com/laracroft",
+  "profileImage": "http://nodebbbb/api/authors/222/entries/217/image"
+}
+```
+
+---
 
 ### PUT /api/authors/{AUTHOR_SERIAL}/followers/{FOREIGN_AUTHOR_FQID}
 
-- **When to use**: Accept a pending follow request from `{FOREIGN_AUTHOR_FQID}`.
-- **Auth**: Must be authenticated as `{AUTHOR_SERIAL}`.
+- **When to use**: Accept a **pending** follow request from `{FOREIGN_AUTHOR_FQID}`. Use when the author reviews their follow requests and approves one. After approval, if the new follower is a remote author, existing entries from `{AUTHOR_SERIAL}` are distributed to their inbox.
+- **Auth**: Must be authenticated as `{AUTHOR_SERIAL}` (owner-only).
+- **Why not remote**: Only the followee approves their own followers.
 
 #### Request
 
 - **Method**: `PUT`
+- **Path params**:
+  - `AUTHOR_SERIAL` — UUID of the local author accepting the follow.
+  - `FOREIGN_AUTHOR_FQID` — percent-encoded FQID of the author to accept.
 - **Body**: None required.
+
+#### Behaviour
+
+- Looks up a `PENDING` `FollowRelationship` where `follower=FOREIGN_AUTHOR` and `followee=AUTHOR_SERIAL`.
+- If found: sets status to `APPROVED`.
+- If the newly approved follower is a remote author: fans out `{AUTHOR_SERIAL}`'s existing entries to that remote author's inbox.
+- If not found: returns `404`.
 
 #### Response
 
-- **Status**: `200 OK` with follow object (state=`accepted`).
-- **Status**: `404 Not Found` if there is no matching pending request.
-- **Status**: `403 Forbidden` if not the owner.
+- **Status**: `200 OK` — follow accepted. Body is the follow object with `state: "accepted"`.
+- **Status**: `404 Not Found` — no matching pending request.
+- **Status**: `403 Forbidden` — not the owner.
 - **Body** (`application/json`):
+
+| Field | Type | Example | Purpose |
+|-------|------|---------|---------|
+| `type` | string | `"follow"` | Object type |
+| `summary` | string | `"UserA wants to follow UserB"` | Human-readable description |
+| `state` | string | `"accepted"` | Confirmed accepted state |
+| `actor` | author object | `{...}` | The follower |
+| `object` | author object | `{...}` | The followee (this author) |
+
+#### Example response (`200 OK`)
 
 ```json
 {
@@ -720,46 +845,86 @@ FQIDs (fully qualified IDs) used in follow URL paths must be **percent-encoded**
   "actor": {
     "type": "author",
     "id": "http://127.0.0.1:8000/api/authors/a-uuid",
+    "host": "http://127.0.0.1:8000/api/",
     "displayName": "UserA",
-    "...": "..."
+    "web": "http://127.0.0.1:8000/authors/a-uuid",
+    "github": "",
+    "profileImage": ""
   },
   "object": {
     "type": "author",
     "id": "http://127.0.0.1:8000/api/authors/b-uuid",
+    "host": "http://127.0.0.1:8000/api/",
     "displayName": "UserB",
-    "...": "..."
+    "web": "http://127.0.0.1:8000/authors/b-uuid",
+    "github": "",
+    "profileImage": ""
   }
 }
 ```
 
+---
+
 ### DELETE /api/authors/{AUTHOR_SERIAL}/followers/{FOREIGN_AUTHOR_FQID}
 
-- **When to use**: Reject a pending follow request, or remove an approved follower.
-- **Auth**: Must be authenticated as `{AUTHOR_SERIAL}`.
+- **When to use**: Reject a pending follow request, or remove an already-approved follower. Use when the author wants to deny someone following them, or revoke a previously accepted follow.
+- **Auth**: Must be authenticated as `{AUTHOR_SERIAL}` (owner-only).
+- **Why not remote**: Only the followee manages who is allowed to follow them.
+
+#### Request
+
+- **Method**: `DELETE`
+- **Path params**:
+  - `AUTHOR_SERIAL` — UUID of the local author removing the follower.
+  - `FOREIGN_AUTHOR_FQID` — percent-encoded FQID of the follower to remove.
+
+#### Behaviour (differs by current relationship state)
+
+| Current state | Behaviour | Response |
+|---------------|-----------|----------|
+| `PENDING` | Sets status to `DENIED`. Record is kept in DB. | `204 No Content` |
+| `APPROVED` | Deletes the relationship record entirely. | `204 No Content` |
+| Does not exist or `DENIED` | Returns error. | `404 Not Found` |
 
 #### Response
 
-- **Status**: `200 OK` with follow object (state=`rejected`) when denying a pending request.
-- **Status**: `204 No Content` when removing an approved follower.
-- **Status**: `404 Not Found` if no matching relationship exists.
-- **Status**: `403 Forbidden` if not the owner.
+- **Status**: `204 No Content` — request denied or follower removed.
+- **Status**: `404 Not Found` — no matching pending request or approved follower.
+- **Status**: `403 Forbidden` — not the owner.
 
 ---
 
 ### GET /api/authors/{AUTHOR_SERIAL}/follow_requests
 
-- **When to use**: List incoming follow requests (pending only) that `{AUTHOR_SERIAL}` needs to approve or deny.
+- **When to use**: List all **pending** incoming follow requests that `{AUTHOR_SERIAL}` needs to review. Use to populate the "follow requests" notification in the UI.
 - **Auth**: Must be authenticated as `{AUTHOR_SERIAL}` (owner-only).
+- **Why**: An author should only see their own incoming requests.
+
+#### Request
+
+- **Method**: `GET`
+- **Path params**: `AUTHOR_SERIAL` — UUID of the local author.
 
 #### Response
 
-- **Status**: `200 OK`, or `403 Forbidden` if not the owner.
+- **Status**: `200 OK`
+- **Status**: `403 Forbidden` — not the owner.
 - **Body** (`application/json`):
+
+| Field | Type | Example | Purpose |
+|-------|------|---------|---------|
+| `type` | string | `"follow_requests"` | Identifies this as a follow request list |
+| `requests` | array | `[...]` | Array of follow objects (pending only) |
+| `items` | array | `[...]` | Same as `requests` — included for backwards compatibility |
+
+Each item in `requests`/`items` is a follow object with `state: "requesting"`.
+
+#### Example response
 
 ```json
 {
   "type": "follow_requests",
-  "items": [
+  "requests": [
     {
       "type": "follow",
       "summary": "UserA wants to follow UserB",
@@ -767,17 +932,24 @@ FQIDs (fully qualified IDs) used in follow URL paths must be **percent-encoded**
       "actor": {
         "type": "author",
         "id": "http://127.0.0.1:8000/api/authors/a-uuid",
+        "host": "http://127.0.0.1:8000/api/",
         "displayName": "UserA",
-        "...": "..."
+        "web": "http://127.0.0.1:8000/authors/a-uuid",
+        "github": "",
+        "profileImage": ""
       },
       "object": {
         "type": "author",
         "id": "http://127.0.0.1:8000/api/authors/b-uuid",
+        "host": "http://127.0.0.1:8000/api/",
         "displayName": "UserB",
-        "...": "..."
+        "web": "http://127.0.0.1:8000/authors/b-uuid",
+        "github": "",
+        "profileImage": ""
       }
     }
-  ]
+  ],
+  "items": ["... same as requests ..."]
 }
 ```
 
@@ -785,13 +957,26 @@ FQIDs (fully qualified IDs) used in follow URL paths must be **percent-encoded**
 
 ### GET /api/authors/{AUTHOR_SERIAL}/friends
 
-- **When to use**: List mutual friends (both authors follow each other with approved status).
+- **When to use**: List all mutual friends of `{AUTHOR_SERIAL}` — authors where both the follow from `{AUTHOR_SERIAL}` to them **and** their follow back to `{AUTHOR_SERIAL}` are `APPROVED`.
 - **Auth**: Must be authenticated as `{AUTHOR_SERIAL}` (owner-only).
+
+#### Request
+
+- **Method**: `GET`
+- **Path params**: `AUTHOR_SERIAL` — UUID of the local author.
 
 #### Response
 
-- **Status**: `200 OK`, or `403 Forbidden` if not the owner.
+- **Status**: `200 OK`
+- **Status**: `403 Forbidden` — not the owner.
 - **Body** (`application/json`):
+
+| Field | Type | Example | Purpose |
+|-------|------|---------|---------|
+| `type` | string | `"friends"` | Identifies this as a friends list |
+| `friends` | array | `[...]` | Array of author objects (mutual approved follows only) |
+
+#### Example response
 
 ```json
 {
@@ -810,14 +995,25 @@ FQIDs (fully qualified IDs) used in follow URL paths must be **percent-encoded**
 }
 ```
 
+---
+
 ### GET /api/authors/{AUTHOR_SERIAL}/friends/{FOREIGN_AUTHOR_FQID}
 
-- **When to use**: Check whether a specific author is a mutual friend.
+- **When to use**: Check whether a specific author is a mutual friend of `{AUTHOR_SERIAL}`. Use to drive visibility decisions (e.g. whether a `FRIENDS` entry should be shown to the viewer).
 - **Auth**: Must be authenticated as `{AUTHOR_SERIAL}`.
+
+#### Request
+
+- **Method**: `GET`
+- **Path params**:
+  - `AUTHOR_SERIAL` — UUID of the local author.
+  - `FOREIGN_AUTHOR_FQID` — percent-encoded FQID of the author to check friendship with.
 
 #### Response
 
-- **Status**: `200 OK` with the friend's author object if they are mutual friends, or `404 Not Found` if not friends.
+- **Status**: `200 OK` — they are mutual friends. Body is the friend's author object.
+- **Status**: `404 Not Found` — not mutual friends.
+- **Status**: `403 Forbidden` — not the owner.
 
 ---
 
