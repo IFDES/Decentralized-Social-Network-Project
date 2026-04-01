@@ -2,10 +2,9 @@ import uuid
 
 from django.conf import settings
 from django.db import models
+from django.utils import timezone
 
 from authors.models import Author
-
-from datetime import datetime, timezone
 
 ENTRY_VISIBILITY_PUBLIC = "PUBLIC"
 ENTRY_VISIBILITY_FRIENDS = "FRIENDS"
@@ -159,7 +158,7 @@ class Entry(models.Model):
     is_deleted = models.BooleanField(default=False, db_index=True)
     deleted_at = models.DateTimeField(null=True, blank=True)
 
-    published = models.DateTimeField(default=datetime.now(timezone.utc).isoformat(), db_index=True)
+    published = models.DateTimeField(default=timezone.now, db_index=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
