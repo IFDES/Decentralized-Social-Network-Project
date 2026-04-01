@@ -53,9 +53,9 @@ def upsert_remote_author(author_data: dict) -> Author:
                 setattr(author, field, value)
                 changed = True
 
-        if author.is_local:
-            author.is_local = False
-            changed = True
+        # if author.is_local:
+        #     author.is_local = False
+        #     changed = True
 
         if author.is_deleted:
             author.is_deleted = False
