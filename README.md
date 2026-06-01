@@ -2,7 +2,8 @@
 
 A decentralized social networking platform built using Django and Django REST Framework. The application enables users across multiple independent servers to interact through posts, likes, comments, follows, and shared content while maintaining decentralized ownership of data.
 
-Features
+## Features
+
 User authentication and profile management
 Create, edit, and delete posts
 Public and private content visibility
@@ -13,7 +14,9 @@ Remote author discovery
 Federation between distributed nodes
 RESTful API endpoints
 Django Admin support
-Tech Stack
+
+## Tech Stack
+
 Python
 Django
 Django REST Framework
@@ -25,14 +28,16 @@ Prerequisites
 Python 3.11+
 pip
 virtualenv
-Installation
+
+## Installation
+
 1. Clone the repository
 git clone https://github.com/IFDES/Decentralized-Social-Network-Project.git
 cd Decentralized-Social-Network-Project
 2. Create a virtual environment
 python -m venv venv
 
-Activate the environment:
+## Activate the environment:
 
 macOS/Linux:
 
