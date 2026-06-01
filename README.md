@@ -1,20 +1,32 @@
-[![Review Assignment Due Date](https://classroom.github.com/assets/deadline-readme-button-22041afd0340ce965d47ae6ef1cefeee28c7c493a6346c4f15d667ab976d596c.svg)](https://classroom.github.com/a/bRZK9dqv)
-CMPUT404-project-socialdistribution
-===================================
+**Decentralized Social Network Project**
 
-CMPUT404-project-socialdistribution
+A decentralized social networking platform built with Django and Django REST Framework. The application enables users hosted on different servers to interact seamlessly through posts, comments, likes, follows, and content sharing while maintaining a distributed architecture.
 
-See [the web page](https://uofa-cmput404.github.io/general/project.html) for a description of the project.
-
-Make a distributed social network!
-
-## Group Members
-Rayan Zhi <br>
-Eric Mo <br>
-Garrick Tse <br>
-Ali Zain Malik <br>
-Peter Davidson <br>
+Features
+User registration and authentication
+User profiles and author discovery
+Follow and unfollow functionality
+Create, edit, and delete posts
+Public and private post visibility
+Comments and likes
+Inbox notifications
+Remote node communication
+REST API endpoints
+Administrative dashboard
+Group Members
+Rayan Zhi
+Eric Mo
+Garrick Tse
+Ali Zain Malik
+Peter Davidson
 Regan Ng
+Technology Stack
+Python
+Django
+Django REST Framework
+SQLite / PostgreSQL
+HTML, CSS, JavaScript
+Bootstrap
 
 ## License
 
