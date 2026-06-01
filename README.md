@@ -1,4 +1,4 @@
-**Decentralized Social Network Project**
+## Decentralized Social Network Project
 
 A decentralized social networking platform built with Django and Django REST Framework. The application enables users hosted on different servers to interact seamlessly through posts, comments, likes, follows, and content sharing while maintaining a distributed architecture.
 
